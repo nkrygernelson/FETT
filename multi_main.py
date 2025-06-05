@@ -1,8 +1,11 @@
+import optuna
 import torch
 import torch.optim as optim
 import torch.nn as nn
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg') # Use a non-interactive backend
 import matplotlib.pyplot as plt
 import os
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -12,7 +15,7 @@ from preprocess_set_data import MultiFidelityPreprocessing
 
 
 class MultiTrainer:
-    def __init__(self, subsample_dict = None, model_params = None, training_params = None,fidelity_map = None, property_name = None, fidelities_dir = None):
+    def __init__(self, subsample_dict = None, model_params = None, training_params = None,fidelity_map = None, property_name = None, fidelities_dir = None, pooling_params = None):
         if model_params is None:
             self.model_params = {
                 "num_elements": 118,
@@ -28,7 +31,7 @@ class MultiTrainer:
             self.model_params = model_params
         if training_params is None:
             self.training_params = {
-                "epochs": 10, "batch_size": 32, "learning_rate": 0.001, "weight_decay": 1e-5, "multi_train_split":0.8,}
+                "epochs": 10, "batch_size": 32, "learning_rate": 0.001, "weight_decay": 1e-5, "multi_train_split":0.8,"trial":None}
         else:
             self.training_params = training_params
         if subsample_dict is None:
@@ -81,7 +84,6 @@ class MultiTrainer:
 
         combined_train_df = pd.DataFrame()
         test_datasets = {}
-        train_stats = {}
         train_split = self.training_params["multi_train_split"]
 
         # Process each fidelity dataset
@@ -139,13 +141,8 @@ class MultiTrainer:
             test_df = df.iloc[:test_size].copy()
             train_df = df.iloc[test_size:].copy()
             print(train_df.columns)
-            mean = train_df[self.property_name].mean()
-            std = train_df[self.property_name].std()
-            train_stats[fidelity_name] = {
-                "mean": mean,
-                "std": std,
-                "num_samples": len(train_df)
-            }
+            
+           
             # Add fidelity column
             train_df['fidelity'] = fidelity_id
             test_df['fidelity'] = fidelity_id
@@ -163,7 +160,7 @@ class MultiTrainer:
         if combined_train_df.empty and self.fidelity_map:
             print("WARNING: No data was loaded into combined_train_df. Check data paths and file availability.")
        
-        return combined_train_df, test_datasets, train_stats
+        return combined_train_df, test_datasets
 
 
     def create_test_dataloader(self, test_df, preprocess, mean, std,):
@@ -195,7 +192,7 @@ class MultiTrainer:
     
 
 
-    def train_multifidelity_model(self, combined_train_df, model_params=None, pooling_type="gated"):
+    def train_multifidelity_model(self, combined_train_df, model_params=None, pooling_type="gated", trial = None,):
         """
         Train a multi-fidelity model using the  combined training dataset.
         """
@@ -278,7 +275,8 @@ class MultiTrainer:
                 num_heads=self.model_params["num_heads"],
                 hidden_dim=self.model_params["hidden_dim"],
                 dropout=self.model_params["dropout"],
-                pooling_type=self.model_params["pooling_type"]
+                pooling_type=self.model_params["pooling_type"],
+                pooling_params=self.model_params.get("pooling_params", None)
             )
     
         device = torch.device("cuda" if torch.cuda.is_available(
@@ -305,8 +303,13 @@ class MultiTrainer:
 
         # Create directory for saving predictions
         os.makedirs(predictions_dir_path, exist_ok=True)
-        best_model_path = os.path.join(
-            predictions_dir_path, f"best_model_{pooling_type}.pt")
+        if trial:
+            best_model_path = os.path.join(
+                predictions_dir_path, f"best_model_{pooling_type}_trial_{trial.number}.pt")
+        else:
+            best_model_path = os.path.join(
+                predictions_dir_path, f"best_model_{pooling_type}_trial.pt")
+
 
         # Training loop
         for epoch in range(num_epochs):
@@ -318,7 +321,6 @@ class MultiTrainer:
                 element_weights = element_weights.to(device)
                 fidelity_ids = fidelity_ids.to(device)
                 bandgaps = bandgaps.to(device)
-
                 optimizer.zero_grad()
                 predictions = model(element_ids, fidelity_ids, element_weights)
                 loss = criterion(predictions, bandgaps)
@@ -348,6 +350,10 @@ class MultiTrainer:
                     running_val_loss += val_loss.item() * len(bandgaps)
 
             epoch_val_loss = running_val_loss / len(val_dataset)
+            if trial:
+                trial.report(epoch_val_loss, epoch)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
             scheduler.step(epoch_val_loss)
             train_losses.append(epoch_train_loss)
             val_losses.append(epoch_val_loss)
@@ -386,7 +392,7 @@ class MultiTrainer:
         model.load_state_dict(torch.load(best_model_path))
         print(f"Loaded best model from: {best_model_path}")
 
-        return model,preprocess
+        return model,preprocess, mean, std
 
 
     def evaluate_on_fidelity(self, model, test_loader,  mean, std, device=None):
@@ -589,20 +595,86 @@ class MultiTrainer:
         print("\n" + "="*50)
         print("Preparing Datasets")
         print("="*50 + "\n")
-        combined_train_df, test_datasets, train_stats= self.prepare_datasets_for_multifidelity(
+        combined_train_df, test_datasets= self.prepare_datasets_for_multifidelity(
             subsample_dict=self.subsample_dict)
 
         if combined_train_df.empty:
             print("Halting execution: combined_train_df is empty after prepare_datasets_for_multifidelity.")
             print("Please check your data CSV files and their paths.")
             return {}, {}
-
+        mean = combined_train_df["BG"].mean()
+        std = combined_train_df["BG"].std()
         print("\n" + "="*50)
         print("Training Multi-Fidelity Model")
         print("="*50 + "\n")
         # Pass model_params from the __main__ block
-        model, preprocess = self.train_multifidelity_model(
-            combined_train_df, model_params=self.model_params, pooling_type=self.model_params.get('pooling_type', 'gated'))
+        load_trained = False
+        if load_trained:
+           
+            print("Loading pre-trained model...")
+            # 1. Instantiate model architecture (using self.model_params)
+            model_params = {
+                "num_elements": 118,
+                "num_fidelities": 5,
+                "embedding_dim": 164,
+                "fidelity_dim": 16,
+                "num_blocks": 5,
+                "num_heads": 10,
+                "hidden_dim": 250,
+                "dropout": 0.1,
+                "pooling_type": "gated"
+            }
+            model = SetBasedBandgapModel(
+                num_elements=model_params["num_elements"],
+                embedding_dim=model_params["embedding_dim"],
+                num_fidelities=model_params["num_fidelities"],
+                fidelity_dim=model_params["fidelity_dim"],
+                num_blocks=model_params["num_blocks"],
+                num_heads=model_params["num_heads"],
+                hidden_dim=model_params["hidden_dim"],
+                dropout=model_params["dropout"],
+                pooling_type=model_params["pooling_type"],
+                pooling_params=model_params.get("pooling_params", None)
+            )
+            model.to(self.device) # Move model to device
+
+            # 2. Define path to your saved model
+            #    This path should point to where your best model was saved from a previous run.
+            #    It uses self.save_prefix and the pooling type from model_params.
+            #    If a trial number was used during saving, you'll need to specify that too.
+            predictions_dir_path = os.path.join(
+                self.save_prefix, "predictions", "multifidelity"
+            )
+            # Construct the model path carefully to match how it was saved.
+            # If saved with a trial number from Optuna:
+            # best_model_path = os.path.join(
+            #     predictions_dir_path, f"best_model_{self.model_params['pooling_type']}_trial_YOUR_TRIAL_NUMBER.pt"
+            # )
+            # If saved without a specific trial number in the filename (as per your training code's default):
+            best_model_path = os.path.join(
+                predictions_dir_path, f"big.pt"
+            )
+            
+            print(f"  Attempting to load from: {best_model_path}")
+
+            # 3. Load state_dict
+            try:
+                state_dict = torch.load(best_model_path, map_location=self.device)
+                model.load_state_dict(state_dict)
+                print("  Successfully loaded model weights.")
+            except FileNotFoundError:
+                print(f"  ERROR: Model file not found at {best_model_path}. Halting.")
+                return {}, {} # Or handle error appropriately
+            except Exception as e:
+                print(f"  ERROR loading model: {e}. Halting.")
+                return {}, {} # Or handle error appropriately
+
+            # 4. Set to evaluation mode
+            preprocess = MultiFidelityPreprocessing()
+            model.eval()
+        else:
+            model, preprocess, mean, std = self.train_multifidelity_model(
+                combined_train_df, model_params=self.model_params, pooling_type=self.model_params.get('pooling_type', 'gated'))
 
         results = {}
         plot_paths = {}
@@ -616,11 +688,11 @@ class MultiTrainer:
         else:
             for fidelity_name, test_df in test_datasets.items():
                 print(f"Evaluating on {fidelity_name} dataset...")
-                mean, std = train_stats["fidelity_name"]["mean"], train_stats["fidelity_name"]["std"]
+        
                 test_loader = self.create_test_dataloader(
                     test_df, preprocess, mean, std)
                 metrics, predictions, targets = self.evaluate_on_fidelity(
-                    model, test_loader, device, mean, std
+                    model, test_loader, mean, std, device=device
                 )
                 results[fidelity_name] = metrics
                 plot_path = self.plot_fidelity_results(
