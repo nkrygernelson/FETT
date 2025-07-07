@@ -6,7 +6,7 @@
 #nexp vs npbe
 #nhse vs npbe
 
-from multi_main import MultiTrainer
+from multi_main import MultiTrainer 
 pooling_params = {"hierarchical":{"num_motifs":6}}
 model_params = {
     "num_elements": 118,
@@ -45,6 +45,8 @@ else:
         }
     subsample_dict = {"GGA": 0.5, "SCAN": 1, "GLLBSC": 1, "HSE": 1, "EXPT": 1}
 
-trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict, training_params=training_params, fidelities_dir=fidelities_dir, fidelity_map=fidelity_map)
+trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
+                       training_params=training_params, fidelities_dir=fidelities_dir, 
+                       fidelity_map=fidelity_map, optunize=True)
 results, plot_paths = trainer.run_multifidelity_experiments()
 print(results)
