@@ -17,11 +17,13 @@ from dataset_creator import prepare_datasets
 matplotlib.use('Agg')  # Use a non-interactive backend
 
 class MultiTrainer:
-    def __init__(self, 
+    def __init__(self,
                  subsample_dict=None, model_params=None, training_params=None,
-                 fidelity_map=None, property_name=None, 
-                 pooling_params=None, trained_model_dir = None, optunize = False, model_params_path = None, trained_model_path = None):
+                 fidelity_map=None, property_name=None,
+                 pooling_params=None, trained_model_dir=None, optunize=False, 
+                 model_params_path=None, trained_model_path=None, collab=False):
         self.pooling_params = pooling_params
+        self.collab = collab
         if model_params_path and trained_model_path:
             self.load_trained =True
         else:
@@ -74,8 +76,8 @@ class MultiTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available(
         ) else "cpu" if torch.backends.mps.is_available() else "cpu")
         # --- Google Drive Configuration ---
-        self.GOOGLE_DRIVE = False  # Set for google drive saving
-        self.MAC = True
+        self.GOOGLE_DRIVE = self.collab  # Set for google drive saving
+        self.MAC = False
 
         self.DRIVE_MOUNT_POINT = '/content/drive'
         # *** CUSTOMIZE THIS TO YOUR PREFERRED GDRIVE FOLDER ***
@@ -154,8 +156,12 @@ class MultiTrainer:
         # global save_prefix  # Ensure we're using the globally set save_prefix
 
         # Define paths for saving, prefixed if GOOGLE_DRIVE is True
+        trial_folder = ""
+        if trial:
+            trial_folder = "trials"
+            
         runs_path = os.path.join(
-            self.save_prefix, "runs")
+            self.save_prefix, "runs", trial_folder)
         #combined_train_df = combined_train_df.drop_duplicates()
         # Save the combined training dataset
        
@@ -252,7 +258,9 @@ class MultiTrainer:
         with open(os.path.join(run_path, "model_params.json"), "w") as f:
             json.dump(self.model_params,f, indent = 4)
         with open(os.path.join(run_path,"training_params.json"), 'w') as f:
-            json.dump(self.training_params, f, indent = 4)
+            serializable_params = self.training_params
+            serializable_params.pop("trial")
+            json.dump(serializable_params, f, indent = 4)
         
         # Training loop
         for epoch in range(num_epochs):
@@ -532,7 +540,6 @@ class MultiTrainer:
         if self.load_trained:
             print("Loading pre-trained model...")
             
-           
             with open(self.model_params_path, 'r') as f:
                 model_params = json.load(f)
             model = self.init_model(model_params=model_params)

@@ -1,11 +1,11 @@
 import optuna
 
+import os
+from dataset_creator import prepare_datasets
 from multi_main import MultiTrainer
 
 
-#subsample_dict = {"pbe": 0.1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
-
-
+collab = False
 
 def objective(trial):
     embedding_dim = trial.suggest_int("embedding_dim", 60, 250, step=4) 
@@ -50,35 +50,32 @@ def objective(trial):
         "load_data":True
     }
 
-    mp = True
-    if mp:
-        fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
-        fidelities_dir = "train"
-        subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
-    else:
-        fidelities_dir = "train_homemade"
-        fidelity_map = {
-            "GGA": 0,
-            "SCAN": 1,
-            "GLLBSC": 2,
-            "HSE": 3,
-            "EXPT": 4
-            }
-        subsample_dict = {"GGA": 0.6, "SCAN": 1, "GLLBSC": 1, "HSE": 1, "EXPT": 1}
-    #fidelities_dir = "train"
-    trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict, training_params=training_params, fidelity_map=fidelity_map, property_name='BG', fidelities_dir=fidelities_dir)
-    print(f"\nTrial {trial.number}: Parameters: {trial.params}")
-    combined_train_df, test_datasets= trainer.prepare_datasets_for_multifidelity()
+    combined_train_df, combined_val_df, trains, vals, tests = prepare_datasets()
+
+    fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
+    subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
+
+    model_params_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "model_params.json")
+    trained_model_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "best_model_run_2025-09-18_093927_b25658f2.pt")
+
+    trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
+                        training_params=training_params, 
+                        fidelity_map=fidelity_map, optunize=True,collab=collab)
+
+    
     try:
-        model, preprocess, mean, std = trainer.train_multifidelity_model(combined_train_df, trial=trial)
+        model, preprocess, mean, std = trainer.train_multifidelity_model(combined_train_df,combined_val_df, trial=trial)
     except optuna.TrialPruned:
         raise
     except Exception as e:
         print(f"An error occurred during training for trial {trial.number}: {e}")
+        raise e
         return float('inf') # Indicate failure
+    
+    '''
     nmaes = {}
     total_nmaes = 0
-    for dataset_name, dataset in test_datasets.items():
+    for dataset_name, dataset in tests.items():
         test_mean, test_std = dataset[trainer.property_name].mean(), dataset[trainer.property_name].std()
         test_loader = trainer.create_test_dataloader(dataset, preprocess, mean, std)
         metrics, predictions, targets = trainer.evaluate_on_fidelity( model,test_loader,  mean, std)
@@ -86,14 +83,31 @@ def objective(trial):
         nmaes[dataset_name] = {'nmae': nmae}
         print(f"Dataset: {dataset_name}, NMAE: {nmae},")
         total_nmaes += nmae
-    return total_nmaes
+    '''
+    dataset = tests["hse"]
+    test_mean, test_std = dataset[trainer.property_name].mean(), dataset[trainer.property_name].std()
+    test_loader = trainer.create_test_dataloader(dataset, preprocess, mean, std)
+    metrics, predictions, targets = trainer.evaluate_on_fidelity( model,test_loader,  mean, std)
+    return metrics["mae"]
+
+save_prefix = ""
+if collab == True:
     
+    DRIVE_MOUNT_POINT = '/content/drive'
+    # *** CUSTOMIZE THIS TO YOUR PREFERRED GDRIVE FOLDER ***
+    YOUR_PROJECT_GDRIVE_FOLDER = 'BeemoColab'
+    DRIVE_BASE_SAVE_PATH = os.path.join(
+        DRIVE_MOUNT_POINT, 'MyDrive', YOUR_PROJECT_GDRIVE_FOLDER)
+
+    # This will be "" if not using Google Drive, or the DRIVE_BASE_SAVE_PATH if using it.
+    save_prefix = DRIVE_BASE_SAVE_PATH
+ 
 study_name = "latest_multifidelity_bandgap_study" # You can change this
 storage_name = f"sqlite:///{study_name}.db"
 num_parallel_jobs = 6
 study = optuna.create_study(
     study_name=study_name,
-    storage=storage_name, # Specify storage for persistence and dashboard
+    storage=os.path.join(save_prefix, storage_name), # Specify storage for persistence and dashboard
     load_if_exists=True, # Load an existing study with the same name if it exists
     direction="minimize",
     pruner=optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=5, interval_steps=1,

@@ -37,6 +37,6 @@ trained_model_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "bes
 trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
                        training_params=training_params,model_params_path=model_params_path,
                        trained_model_path=trained_model_path, 
-                       fidelity_map=fidelity_map, optunize=False,)
+                       fidelity_map=fidelity_map, optunize=False,collab=True)
 results, plot_paths = trainer.run_multifidelity_experiments()
 print(results)
