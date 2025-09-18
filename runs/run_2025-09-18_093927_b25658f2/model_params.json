@@ -1,0 +1,16 @@
+{
+    "num_elements": 118,
+    "num_fidelities": 5,
+    "embedding_dim": 236,
+    "fidelity_dim": 16,
+    "num_blocks": 4,
+    "num_heads": 4,
+    "hidden_dim": 160,
+    "dropout": 0.10614,
+    "pooling_type": "weighted",
+    "pooling_params": {
+        "hierarchical": {
+            "num_motifs": 6
+        }
+    }
+}

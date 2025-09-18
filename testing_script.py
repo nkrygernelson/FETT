@@ -1,10 +1,4 @@
-# I just have to go through the subsample dict and note the results of the training.
-#does this warrant having a new function for testing. 
-#This is for a 4 fidelity model no scan
-#Ngllbsc performance (diferent amounts of ngllbsc) vs npbe
-#nscan perfromance
-#nexp vs npbe
-#nhse vs npbe
+
 
 from multi_main import MultiTrainer 
 pooling_params = {"hierarchical":{"num_motifs":6}}

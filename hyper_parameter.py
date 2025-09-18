@@ -46,7 +46,8 @@ def objective(trial):
         "batch_size": trial.suggest_categorical("batch_size", [32, 64]),
         "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True),
-        "trial":trial
+        "trial":trial,
+        "load_data":True
     }
 
     mp = True
@@ -78,7 +79,6 @@ def objective(trial):
     nmaes = {}
     total_nmaes = 0
     for dataset_name, dataset in test_datasets.items():
-
         test_mean, test_std = dataset[trainer.property_name].mean(), dataset[trainer.property_name].std()
         test_loader = trainer.create_test_dataloader(dataset, preprocess, mean, std)
         metrics, predictions, targets = trainer.evaluate_on_fidelity( model,test_loader,  mean, std)
