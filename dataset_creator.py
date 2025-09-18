@@ -200,7 +200,7 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8):
         # Assumes input data is in 'data/train/' relative to save_prefix if GOOGLE_DRIVE is True
         # Or locally if GOOGLE_DRIVE is False
         data_file_path = os.path.join(
-             'data',"train", f'{fidelity_name}.csv')
+             'data',"mp19", f'{fidelity_name}.csv')
 
         df = pd.read_csv(data_file_path)
 
@@ -263,9 +263,5 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8):
     return combined_train_df, combined_val_df, trains, vals, tests
 
     
-'''
-_, _,trains, _, tests = prepare_only_new_on_expt()
 
-show_dist(tests["expt"], trains["expt"])
-'''
-    
+

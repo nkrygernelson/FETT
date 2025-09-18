@@ -4,8 +4,15 @@ import os
 from dataset_creator import prepare_datasets
 from multi_main import MultiTrainer
 
+import time
+import threading
+from optuna_dashboard import wsgi
+import optuna
+from wsgiref.simple_server import make_server
 
-collab = False
+
+
+collab = True
 
 def objective(trial):
     embedding_dim = trial.suggest_int("embedding_dim", 60, 250, step=4) 
@@ -68,8 +75,7 @@ def objective(trial):
     except optuna.TrialPruned:
         raise
     except Exception as e:
-        print(f"An error occurred during training for trial {trial.number}: {e}")
-        raise e
+        
         return float('inf') # Indicate failure
     
     '''
@@ -103,17 +109,27 @@ if collab == True:
     save_prefix = DRIVE_BASE_SAVE_PATH
  
 study_name = "latest_multifidelity_bandgap_study" # You can change this
-storage_name = f"sqlite:///{study_name}.db"
+storage_name = f"sqlite:///{os.path.join(save_prefix, study_name)}.db"
 num_parallel_jobs = 6
 study = optuna.create_study(
     study_name=study_name,
-    storage=os.path.join(save_prefix, storage_name), # Specify storage for persistence and dashboard
+    storage=storage_name, # Specify storage for persistence and dashboard
     load_if_exists=True, # Load an existing study with the same name if it exists
     direction="minimize",
     pruner=optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=5, interval_steps=1,
     )
 )
-
+if collab:
+    port = 1234
+    storage = optuna.storages.RDBStorage(storage_name)
+    app = wsgi(storage)
+    httpd = make_server("localhost", port, app)
+    thread = threading.Thread(target=httpd.serve_forever)
+    thread.start()
+    time.sleep(3) # Wait until the server startup
+    from google.colab import output
+    output.serve_kernel_port_as_window(port, path='/dashboard/')
+    
 print(f"Using Optuna study: {study_name}")
 print(f"Storage: {storage_name}")
 print(f"Number of trials in study before optimization: {len(study.trials)}")
@@ -121,7 +137,7 @@ print(f"Number of trials in study before optimization: {len(study.trials)}")
 
 try:
     # Adjust n_trials as needed for your hyperparameter search
-    study.optimize(objective, n_trials=80, n_jobs = num_parallel_jobs) # Example: run for 20 new trials
+    study.optimize(objective, n_trials=300, n_jobs = num_parallel_jobs) # Example: run for 20 new trials
 except ImportError as e:
     print(f"Could not run Optuna study due to import error: {e}")
 except RuntimeError as e: # Catch potential runtime errors, e.g. DB issues
