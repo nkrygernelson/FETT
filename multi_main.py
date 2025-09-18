@@ -527,7 +527,8 @@ class MultiTrainer:
         print("Training Multi-Fidelity Model")
         print("="*50 + "\n")
         # Pass model_params from the __main__ block
-
+        predictions_dir_path = os.path.join(run_path, "predictions")
+        os.makedirs(predictions_dir_path, exist_ok=True)
         if self.load_trained:
             print("Loading pre-trained model...")
             
