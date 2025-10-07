@@ -115,6 +115,8 @@ class MultiTrainer:
         test_path = os.path.join(save_path, "test")
         test_datasets = {}
         for fidelity_name in self.fidelity_map.keys():
+            if self.subsample_dict[fidelity_name] == 0:
+                continue
             test_datasets[fidelity_name] = pd.read_csv(os.path.join(test_path, f"{fidelity_name}.csv"))
         return combined_train_df, combined_val_df, test_datasets
 
@@ -134,9 +136,9 @@ class MultiTrainer:
 
         # Apply normalization
         normalized_test_data = []
-        for element_ids, element_weights, fid, bg in test_data:
+        for element_ids, element_weights, fid, prop in test_data:
             normalized_test_data.append(
-                (element_ids, element_weights, fid, (bg - mean) / std))
+                (element_ids, element_weights, fid, (prop - mean) / std))
 
         # Create a DataLoader
         test_loader = torch.utils.data.DataLoader(
@@ -260,7 +262,8 @@ class MultiTrainer:
             json.dump(self.model_params,f, indent = 4)
         with open(os.path.join(run_path,"training_params.json"), 'w') as f:
             serializable_params = self.training_params
-            serializable_params.pop("trial")
+            if "trial" in serializable_params.keys():
+                serializable_params.pop("trial")
             json.dump(serializable_params, f, indent = 4)
         
         # Training loop
@@ -426,8 +429,8 @@ class MultiTrainer:
         print(f"Fidelity plot for {fidelity_name} saved to: {plot_file_path}")
 
         df_preds = pd.DataFrame({
-            "Actual_BG": targets,
-            "Predicted_BG": predictions
+            f"Actual_{self.property_name}": targets,
+            f"Predicted_{self.property_name}": predictions
         })
         preds_csv_path = os.path.join(
             predictions_dir, f"{fidelity_name}_predictions.csv")
@@ -529,8 +532,8 @@ class MultiTrainer:
         else:
             combined_train_df, combined_val_df, _,_,test_datasets = prepare_datasets(split_arr = self.training_params["split_arr"])
 
-        mean = combined_train_df["BG"].mean()
-        std = combined_train_df["BG"].std()
+        mean = combined_train_df[self.property_name].mean()
+        std = combined_train_df[self.property_name].std()
 
         print("\n" + "="*50)
         print("Training Multi-Fidelity Model")

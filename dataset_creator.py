@@ -9,6 +9,7 @@ import seaborn as sns
 
 def show_dist(df1, df2, df1_name='Test', df2_name='Train'):
     """
+    TODO: make it work with any property not just bg
     Displays and compares the binned distributions of two dataframes.
 
     The x-axis shows the average 'BG' value for each bin, making it more interpretable.
@@ -57,37 +58,37 @@ def show_dist(df1, df2, df1_name='Test', df2_name='Train'):
 
 
 
-def bg_binning(df, num_bins = 4, column_name='BG'):
+def prop_binning(df, num_bins = 4, prop_name = "BG"):
     """
     Creates stratified bins for a column, grouping all outliers into the highest bin.
     Uses IQR method.
 
     Args:
         df (pd.DataFrame): The input DataFrame.
-        column_name (str): The name of the column to bin.
+        prop_name (str): The name of the column to bin.
     Returns:
         pd.DataFrame: The DataFrame with the new 'bg_category' column.
     """
   
-    Q1 = df[column_name].quantile(0.25)
-    Q3 = df[column_name].quantile(0.75)
+    Q1 = df[prop_name].quantile(0.25)
+    Q3 = df[prop_name].quantile(0.75)
     IQR = Q3 - Q1
     outlier_threshold = Q3 + 1.5 * IQR
-    is_outlier = df[column_name] > outlier_threshold
-    df['bg_category'] = pd.cut(
-        df.loc[~is_outlier, column_name],
+    is_outlier = df[prop_name] > outlier_threshold
+    df[f'{prop_name}_category'] = pd.cut(
+        df.loc[~is_outlier, prop_name],
         bins=num_bins,  
         labels=False,
         duplicates='drop'
     )
     # 4. Assign all outliers (which are currently NaN) to the highest bin
-    highest_bin = df['bg_category'].max()
-    df['bg_category'] = df['bg_category'].fillna(highest_bin)
+    highest_bin = df[f'{prop_name}_category'].max()
+    df[f'{prop_name}_category'] = df[f'{prop_name}_category'].fillna(highest_bin)
     return df
 
 
     
-def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_map = None,  num_bins=8):
+def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_map = None,  num_bins=8, prop_name = "BG",dataset_name = "standard"):
     """
     """
     train_split = split_arr[0]
@@ -98,7 +99,7 @@ def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_ma
     if not fidelity_map:
         fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
 
-    dataset_name = "standard"
+    
 
     # Process each fidelity dataset
     #the order matters, I put expt last
@@ -119,6 +120,8 @@ def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_ma
         os.makedirs(os.path.join(general_path, "train"))
 
     for fidelity_name, fidelity_id in fidelity_map.items():
+        if subsample_dict[fidelity_name] == 0:
+            continue
         print(f"Processing {fidelity_name} dataset...")
         # Construct path for loading data
         # Assumes input data is in 'data/train/' relative to save_prefix if GOOGLE_DRIVE is True
@@ -136,23 +139,23 @@ def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_ma
     combined_train_df = pd.DataFrame()
     combined_val_df = pd.DataFrame()
     for fidelity_name in data.keys():
-        data[fidelity_name] = bg_binning(data[fidelity_name], num_bins = num_bins)
+        data[fidelity_name] = prop_binning(data[fidelity_name], num_bins = num_bins,prop_name=prop_name)
         train,test = train_test_split(data[fidelity_name],
             train_size=1-test_split,
-            stratify=data[fidelity_name]['bg_category'],
+            stratify=data[fidelity_name][f'{prop_name}_category'],
             random_state=42 
         )
         train, val = train,test = train_test_split(train,
             train_size=train_split/(train_split+val_split),
-            stratify=train['bg_category'],
+            stratify=train[f'{prop_name}_category'],
             random_state=42 
         )
         trains[fidelity_name] = train
         tests[fidelity_name] = test
         vals[fidelity_name] = val
 
-        combined_val_df = pd.concat([combined_val_df, val.drop(columns = "bg_category")])
-        combined_train_df = pd.concat([combined_train_df, train.drop(columns = "bg_category")])
+        combined_val_df = pd.concat([combined_val_df, val.drop(columns = f"{prop_name}_category")])
+        combined_train_df = pd.concat([combined_train_df, train.drop(columns = f"{prop_name}_category")])
         tests[fidelity_name].to_csv(os.path.join(general_path, "test",f"{fidelity_name}.csv"), index=False)
         trains[fidelity_name].to_csv(os.path.join(general_path, "train",f"{fidelity_name}.csv"), index= False)
         vals[fidelity_name].to_csv(os.path.join(general_path, "val",f"{fidelity_name}.csv"), index= False)
@@ -163,7 +166,7 @@ def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_ma
     return combined_train_df, combined_val_df, trains, vals, tests
 
 
-def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8):
+def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8, ):
     """
     The test expt bandgaps only have bandgaps 
     that have not been seen at lower fidelities
@@ -209,16 +212,16 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8):
         df["fidelity"] = fidelity_id
         data[fidelity_name] = df
     
-    data["expt"] = bg_binning(data["expt"], num_bins = num_bins)
+    data["expt"] = prop_binning(data["expt"], num_bins = num_bins)
 
     expt_train, expt_test = train_test_split(data["expt"],
                 train_size=1-test_split,
-                stratify=data["expt"]["bg_category"],
+                stratify=data["expt"][f"bg_category"],
                 random_state=42 
             )
     expt_train, expt_val = train_test_split(expt_train,
                 train_size=train_split/(train_split+val_split),
-                stratify=expt_train["bg_category"],
+                stratify=expt_train[f"bg_category"],
                 random_state=42 
             )
     
@@ -229,7 +232,7 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8):
         
         if fidelity_name != "expt":
             data[fidelity_name] = data[fidelity_name][~data[fidelity_name]["formula"].isin(expt_test["formula"])]
-            data[fidelity_name] = bg_binning(data[fidelity_name], num_bins = num_bins)
+            data[fidelity_name] = prop_binning(data[fidelity_name], num_bins = num_bins)
             train,test = train_test_split(data[fidelity_name],
                 train_size=1-test_split,
                 stratify=data[fidelity_name]['bg_category'],
@@ -264,4 +267,6 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8):
 
     
 
-
+subsample_dict={"pbe":1,"hse":1,"scan":1,"gllb-sc":1, "expt":0}
+fidelity_map = {"pbe":0, "scan":0, "gllb-sc":0, "hse":0, "expt":0}
+prepare_datasets(prop_name="BG",fidelity_map=fidelity_map,subsample_dict=subsample_dict, dataset_name="FE_standard" )

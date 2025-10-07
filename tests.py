@@ -15,7 +15,7 @@ model_params = {
     "pooling_type": "weighted",
     "pooling_params":pooling_params,
 }
-load_path = os.path.join("data","runs","only_new_on_expt")
+load_path = os.path.join("data","runs","FE_standard")
 training_params = {
     "multi_train_split": 0.8,
     "epochs": 90,
@@ -28,15 +28,15 @@ training_params = {
 
 
 fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
-fidelities_dir = "train"
-subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
+subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 0}
 
 model_params_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "model_params.json")
 trained_model_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "best_model_run_2025-09-18_093927_b25658f2.pt")
-
+trained_model_path = None
 trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
-                       training_params=training_params,model_params_path=model_params_path,
-                       trained_model_path=trained_model_path, 
-                       fidelity_map=fidelity_map, optunize=False,collab=True)
+                       training_params=training_params,model_params_path=None,
+                       property_name="FE",
+                       trained_model_path=None, 
+                       fidelity_map=fidelity_map, optunize=False,collab=False)
 results, plot_paths = trainer.run_multifidelity_experiments()
 print(results)
