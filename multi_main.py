@@ -74,7 +74,8 @@ class MultiTrainer:
         else:
             self.property_name = property_name
         self.device = torch.device("cuda" if torch.cuda.is_available(
-        ) else "cpu" if torch.backends.mps.is_available() else "cpu")
+        ) else "mps" if torch.backends.mps.is_available() else "cpu")
+        self.device = torch.device("mps")
         # --- Google Drive Configuration ---
         self.GOOGLE_DRIVE = self.collab  # Set for google drive saving
         self.MAC = False

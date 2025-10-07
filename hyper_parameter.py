@@ -12,7 +12,7 @@ from wsgiref.simple_server import make_server
 
 
 
-collab = True
+collab = False
 
 def objective(trial):
     embedding_dim = trial.suggest_int("embedding_dim", 60, 250, step=4) 
@@ -127,8 +127,6 @@ if collab:
     thread = threading.Thread(target=httpd.serve_forever)
     thread.start()
     time.sleep(3) # Wait until the server startup
-    from google.colab import output
-    output.serve_kernel_port_as_window(port, path='/dashboard/')
     
 print(f"Using Optuna study: {study_name}")
 print(f"Storage: {storage_name}")
@@ -137,7 +135,7 @@ print(f"Number of trials in study before optimization: {len(study.trials)}")
 
 try:
     # Adjust n_trials as needed for your hyperparameter search
-    study.optimize(objective, n_trials=300, n_jobs = num_parallel_jobs) # Example: run for 20 new trials
+    study.optimize(objective, n_trials=60, n_jobs = num_parallel_jobs) # Example: run for 20 new trials
 except ImportError as e:
     print(f"Could not run Optuna study due to import error: {e}")
 except RuntimeError as e: # Catch potential runtime errors, e.g. DB issues
