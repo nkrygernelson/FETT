@@ -264,9 +264,3 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8, ):
     combined_val_df.to_csv(os.path.join(general_path, "combined_val.csv",), index=False)
   
     return combined_train_df, combined_val_df, trains, vals, tests
-
-    
-
-subsample_dict={"pbe":1,"hse":1,"scan":1,"gllb-sc":1, "expt":0}
-fidelity_map = {"pbe":0, "scan":0, "gllb-sc":0, "hse":0, "expt":0}
-prepare_datasets(prop_name="BG",fidelity_map=fidelity_map,subsample_dict=subsample_dict, dataset_name="FE_standard" )

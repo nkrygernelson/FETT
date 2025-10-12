@@ -2,41 +2,40 @@
 from multi_main import MultiTrainer 
 import os
 
-pooling_params = {"hierarchical":{"num_motifs":6}}
+load_path = os.path.join("data","runs","standard")
+
+pooling_params = {} # num_motifs is empty in the table
 model_params = {
-    "num_elements": 118,
-    "num_fidelities": 5,
-    "embedding_dim": 236,
-    "fidelity_dim": 16,
-    "num_blocks": 4,
-    "num_heads": 4,
-    "hidden_dim": 160,
-    "dropout": 0.10614,
+    "embedding_dim": 172,
+    "fidelity_dim": 20,
+    "hidden_dim": 288,
+    "num_blocks": 5,
+    "num_fidelities":5,
+    "num_elements":118,
+    "num_heads": 16,
+    "dropout": 0.17912079167770537,
     "pooling_type": "weighted",
-    "pooling_params":pooling_params,
-}
-load_path = os.path.join("data","runs","FE_standard")
-training_params = {
-    "multi_train_split": 0.8,
-    "epochs": 90,
-    "batch_size": 64,
-    "learning_rate": 0.0001147759,
-    "weight_decay": 0.000001141,
-    "load_data":True,
-    "load_path":load_path
+    "pooling_params": pooling_params,
 }
 
+
+training_params = {
+    "epochs": 110,
+    "batch_size": 64,
+    "learning_rate": 0.000351208662205836,
+    "weight_decay": 0.000001093212600,
+    "load_data": True,
+    "load_path": load_path
+}
 
 fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
-subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 0}
+subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
 
-model_params_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "model_params.json")
-trained_model_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "best_model_run_2025-09-18_093927_b25658f2.pt")
 trained_model_path = None
 trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
                        training_params=training_params,model_params_path=None,
-                       property_name="FE",
+                       property_name="BG",
                        trained_model_path=None, 
-                       fidelity_map=fidelity_map, optunize=False,collab=False)
+                       fidelity_map=fidelity_map, optunize=False,collab=True)
 results, plot_paths = trainer.run_multifidelity_experiments()
 print(results)

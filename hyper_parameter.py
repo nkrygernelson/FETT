@@ -3,7 +3,7 @@ import optuna
 import os
 from dataset_creator import prepare_datasets
 from multi_main import MultiTrainer
-
+import pandas as pd
 import time
 import threading
 from optuna_dashboard import wsgi
@@ -12,7 +12,7 @@ from wsgiref.simple_server import make_server
 
 
 
-collab = False
+collab = True
 
 def objective(trial):
     embedding_dim = trial.suggest_int("embedding_dim", 60, 250, step=4) 
@@ -30,7 +30,7 @@ def objective(trial):
         }
     model_params = {
         "num_elements": 118,
-        "num_fidelities": 5, # Should match the number of fidelities in fidelity_map
+        "num_fidelities": 1, # Should match the number of fidelities in fidelity_map
         "embedding_dim": embedding_dim,
         "fidelity_dim": fidelity_dim,
         "num_blocks": trial.suggest_int("num_blocks", 3, 6),
@@ -58,15 +58,15 @@ def objective(trial):
     }
 
     combined_train_df, combined_val_df, trains, vals, tests = prepare_datasets()
+    combined_train_df = pd.read_csv()
 
-    fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
-    subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
+    fidelity_map = {"pbe":0, "scan":0, "gllb-sc":0, "hse":0, "expt":0}
+    subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 0}
 
-    model_params_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "model_params.json")
-    trained_model_path = os.path.join("runs", "run_2025-09-18_093927_b25658f2", "best_model_run_2025-09-18_093927_b25658f2.pt")
+
 
     trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
-                        training_params=training_params, 
+                        training_params=training_params, property_name="FE",
                         fidelity_map=fidelity_map, optunize=True,collab=collab)
 
     

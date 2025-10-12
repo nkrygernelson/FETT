@@ -438,6 +438,45 @@ class MultiTrainer:
         print(
             f"Predictions CSV for {fidelity_name} saved to: {preds_csv_path}")
 
+    def load_model(self):
+        '''
+        Returns initialized model
+        '''
+        with open(self.model_params_path, 'r') as f:
+            model_params = json.load(f)
+        print("model_params")
+        print(model_params)
+        model = self.init_model(model_params=model_params)
+        self.model = model
+        model.to(self.device)  # Move model to device
+
+        # 2. Define path to your saved model
+        #    This path should point to where your best model was saved from a previous run.
+        #    It uses self.save_prefix and the pooling type from model_params.
+        #    If a trial number was used during saving, you'll need to specify that too.
+        #generate a uniqe id
+        
+        # Construct the model path carefully to match how it was saved.
+        # If saved with a trial number from Optuna:
+        # best_model_path = os.path.join(
+        #     predictions_dir_path, f"best_model_{self.model_params['pooling_type']}_trial_YOUR_TRIAL_NUMBER.pt"
+        # )
+        # If saved without a specific trial number in the filename (as per your training code's default):
+        best_model_path = os.path.join(self.trained_model_path)
+        print(f"  Attempting to load from: {best_model_path}")
+        try:
+            state_dict = torch.load(
+                best_model_path, map_location=self.device)
+            model.load_state_dict(state_dict)
+            print("  Successfully loaded model weights.")
+            return model
+        except FileNotFoundError:
+            print(
+                f"  ERROR: Model file not found at {best_model_path}. Halting.")
+            return {}, {}  # Or handle error appropriately
+        except Exception as e:
+            print(f"  ERROR loading model: {e}. Halting.")
+            return {}, {}  # Or handle error appropriately
 
     def create_summary_plot(self, predictions_dir,results):
         """
