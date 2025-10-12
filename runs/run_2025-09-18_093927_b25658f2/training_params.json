@@ -1,0 +1,9 @@
+{
+    "multi_train_split": 0.8,
+    "epochs": 90,
+    "batch_size": 64,
+    "learning_rate": 0.0001147759,
+    "weight_decay": 1.141e-06,
+    "load_data": true,
+    "load_path": "data/runs/only_new_on_expt"
+}

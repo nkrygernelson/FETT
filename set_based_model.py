@@ -26,7 +26,7 @@ class ElementEmbedding(nn.Module):
 
 class FidelityEmbedding(nn.Module):
     """Embeds the fidelity of the data."""
-    def __init__(self, num_fidelities = 6, embedding_dim=16):
+    def __init__(self, num_fidelities = 5, embedding_dim=16):
         super(FidelityEmbedding, self).__init__()
         self.embedding = nn.Embedding(num_fidelities, embedding_dim)
     
@@ -121,8 +121,12 @@ class WeightedPooling(nn.Module):
 
 class DeepSet(nn.Module):
     """Deep Sets architecture for permutation-invariant processing of element sets."""
-    def __init__(self, embedding_dim, num_blocks=3, num_heads=4, dropout=0.1, pooling_type='attention'):
+    def __init__(self, embedding_dim, num_blocks=3, num_heads=4, dropout=0.1, pooling_type='attention', pooling_params = None):
         super(DeepSet, self).__init__()
+        if pooling_params is None:
+            self.pooling_params = {"cross_attention":{"num_queries":4}, "hiearchical":{"num_motifs":4}}
+        else:
+            self.pooling_params = pooling_params
         self.blocks = nn.ModuleList([
             SetAttentionBlock(embedding_dim, num_heads, dropout)
             for _ in range(num_blocks)
@@ -135,9 +139,9 @@ class DeepSet(nn.Module):
         elif pooling_type == 'attention':
             self.pooling = AttentionPooling(embedding_dim, num_heads=num_heads)
         elif pooling_type == 'cross_attention':
-            self.pooling = CrossAttentionPooling(embedding_dim, num_queries=4, num_heads=num_heads)
+            self.pooling = CrossAttentionPooling(embedding_dim, num_queries=self.pooling_params["cross_attention"]["num_queries"], num_heads=num_heads)
         elif pooling_type == 'hierarchical':
-            self.pooling = HierarchicalAttentionPooling(embedding_dim, num_motifs=4, num_heads=num_heads)
+            self.pooling = HierarchicalAttentionPooling(embedding_dim, num_motifs=self.pooling_params["hierarchical"]["num_motifs"], num_heads=num_heads)
         elif pooling_type == 'gated':
             self.pooling = GatedAttentionPooling(embedding_dim)
         else:
@@ -191,13 +195,14 @@ class PredictionHead(nn.Module):
 
 class SetBasedBandgapModel(nn.Module):
     """Complete model for bandgap prediction using set-based representation."""
-    def __init__(self, num_elements=118, embedding_dim=128, fidelity_dim=16,
+    def __init__(self, num_elements=118, num_fidelities=5,embedding_dim=128, fidelity_dim=16,
                  num_blocks=3, num_heads=4, hidden_dim=128, dropout=0.1,
-                 pooling_type='attention'):
+                 pooling_type='attention', pooling_params = None):
         super(SetBasedBandgapModel, self).__init__()
+        
         self.element_embedding = ElementEmbedding(num_elements, embedding_dim)
-        self.fidelity_embedding = FidelityEmbedding(fidelity_dim, fidelity_dim)
-        self.deep_set = DeepSet(embedding_dim+fidelity_dim, num_blocks, num_heads, dropout, pooling_type)
+        self.fidelity_embedding = FidelityEmbedding(num_fidelities, fidelity_dim)
+        self.deep_set = DeepSet(embedding_dim+fidelity_dim, num_blocks, num_heads, dropout, pooling_type, pooling_params=pooling_params)
         self.prediction_head = PredictionHead(embedding_dim+fidelity_dim, hidden_dim, dropout)
         
     def forward(self, element_ids, fidelities, element_weights=None):

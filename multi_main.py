@@ -1,500 +1,777 @@
+# import optuna
+from preprocess_set_data import MultiFidelityPreprocessing
+from set_based_model import SetBasedBandgapModel
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import os
+import matplotlib.pyplot as plt
 import torch
 import torch.optim as optim
 import torch.nn as nn
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import os
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from set_based_model import SetBasedBandgapModel
-from preprocess_set_data import MultiFidelityPreprocessing
+import matplotlib
+import datetime
+import uuid
+import json
+from dataset_creator import prepare_datasets
+matplotlib.use('Agg')  # Use a non-interactive backend
 
-# Map fidelity names to their integer representations
-FIDELITY_MAP = {
-    'GGA': 0,
-    'GGAU': 1,
-    'SCAN': 2,
-    'GLLBSC': 3,
-    'HSE': 4,
-    'EXPT': 5
-}
+class MultiTrainer:
+    def __init__(self,
+                 subsample_dict=None, model_params=None, training_params=None,
+                 fidelity_map=None, property_name=None,
+                 pooling_params=None, trained_model_dir=None, optunize=False, 
+                 model_params_path=None, trained_model_path=None, collab=False):
+        self.pooling_params = pooling_params
+        self.collab = collab
+        if model_params_path and trained_model_path:
+            self.load_trained =True
+        else:
+            self.load_trained = False
+        self.model_params_path = model_params_path
+        self.trained_model_path = trained_model_path
+        if model_params is None:
+            self.model_params = {
+                "num_elements": 118,
+                "num_fidelities": 5,
+                "embedding_dim": 100,
+                "fidelity_dim": 20,
+                "num_blocks": 5,
+                "num_heads": 10,
+                "hidden_dim": 250,
+                "dropout": 0.1,
+                "pooling_type": "gated"}
+        else:
+            self.model_params = model_params
+        if training_params is None:
+            self.training_params = {
+                "epochs": 10, 
+                "batch_size": 32,
+                "learning_rate": 0.001,
+                "weight_decay": 1e-5, 
+                "split_arr": [0.6, 0.2, 0.2], 
+                "trial": None, 
+                "load_data": False}
+        else:
+            self.training_params = training_params
+        if subsample_dict is None:
+            self.subsample_dict = {"pbe": 1, "scan": 1,
+                                   "gllb-sc": 1, "hse": 1, "expt": 1}
+        else:
+            self.subsample_dict = subsample_dict
+        if fidelity_map is None:
+            self.fidelity_map = {
+                'pbe': 0,
+                'scan': 1,
+                'gllb-sc': 2,
+                'hse': 3,
+                'expt': 4
+            }
+        else:
+            self.fidelity_map = fidelity_map
+        if property_name is None:
+            self.property_name = "BG"
+        else:
+            self.property_name = property_name
+        self.device = torch.device("cuda" if torch.cuda.is_available(
+        ) else "mps" if torch.backends.mps.is_available() else "cpu")
+        self.device = torch.device("mps")
+        # --- Google Drive Configuration ---
+        self.GOOGLE_DRIVE = self.collab  # Set for google drive saving
+        self.MAC = False
 
-def prepare_datasets_for_multifidelity():
-    """
-    Prepare datasets for multi-fidelity training and individual fidelity testing.
-    
-    This function:
-    1. Loads each fidelity dataset
-    2. Creates train/test splits for each fidelity
-    3. Combines the training portions for multi-fidelity training
-    4. Keeps the test portions separate for individual evaluation
-    
-    Returns:
-        tuple: (combined_train_df, test_datasets)
-            - combined_train_df: DataFrame with combined training data from all fidelities
-            - test_datasets: Dictionary with fidelity names as keys and test DataFrames as values
-    """
-    combined_train_df = pd.DataFrame()
-    test_datasets = {}
-    
-    # Process each fidelity dataset
-    for fidelity_name, fidelity_id in FIDELITY_MAP.items():
-        print(f"Processing {fidelity_name} dataset...")
-        
-        # Load the dataset
-        df = pd.read_csv(f'data/train/{fidelity_name}.csv')
-        
-        # Shuffle the dataset
-        sample_frac = 1
-        if fidelity_name == "GGA":
-            sample_frac = 0.5
-        if fidelity_name == "SCAN":
-            sample_frac = 0.5
-        
-        df = df.sample(frac=sample_frac, random_state=42).reset_index(drop=True)
-        
-        # Create train/test split (80/20)
-        test_size = int(0.2 * len(df))
-        test_df = df.iloc[:test_size].copy()
-        train_df = df.iloc[test_size:].copy()
-        
-        # Add fidelity column
-        train_df['fidelity'] = fidelity_id
-        test_df['fidelity'] = fidelity_id
-        
-        # Store the test dataset
-        test_datasets[fidelity_name] = test_df
-        
-        # Add training data to combined dataset
-        combined_train_df = pd.concat([combined_train_df, train_df], ignore_index=True)
-        
-        print(f"  Train: {len(train_df)} samples, Test: {len(test_df)} samples")
-    
-    return combined_train_df, test_datasets
+        self.DRIVE_MOUNT_POINT = '/content/drive'
+        # *** CUSTOMIZE THIS TO YOUR PREFERRED GDRIVE FOLDER ***
+        self.YOUR_PROJECT_GDRIVE_FOLDER = 'BeemoColab'
+        self.DRIVE_BASE_SAVE_PATH = os.path.join(
+            self.DRIVE_MOUNT_POINT, 'MyDrive', self.YOUR_PROJECT_GDRIVE_FOLDER)
 
-def create_test_dataloader(test_df, preprocess, mean, std):
-    """
-    Create a DataLoader for a test dataset.
-    
-    Args:
-        test_df: DataFrame with test data
-        preprocess: MultiFidelityPreprocessing instance
-        mean: Mean value for normalization
-        std: Standard deviation for normalization
-        
-    Returns:
-        DataLoader for the test dataset
-    """
-    # Process the test data
-    test_data = []
-    for idx, row in test_df.iterrows():
-        element_ids, element_weights = preprocess.formula_to_set_representation(row['formula'])
-        test_data.append((element_ids, element_weights, int(row['fidelity']), row['BG']))
-    
-    # Apply normalization
-    normalized_test_data = []
-    for element_ids, element_weights, fid, bg in test_data:
-        normalized_test_data.append((element_ids, element_weights, fid, (bg - mean) / std))
-    
-    # Create a DataLoader
-    test_loader = torch.utils.data.DataLoader(
-        normalized_test_data,
-        batch_size=preprocess.batch_size,
-        shuffle=False,
-        collate_fn=preprocess.collate_fn
-    )
-    
-    return test_loader
+        # This will be "" if not using Google Drive, or the DRIVE_BASE_SAVE_PATH if using it.
+        if self.GOOGLE_DRIVE:
+            self.save_prefix = self.DRIVE_BASE_SAVE_PATH
+        else:
+            self.save_prefix = ""
+        self.optunize = optunize
 
-def train_multifidelity_model(combined_train_df, pooling_type='gated'):
-    """
-    Train a multi-fidelity model using the combined training dataset.
-    
-    Args:
-        combined_train_df: DataFrame with combined training data
-        pooling_type: Type of pooling to use in the model
+    def init_model(self, model_params):
+         model = SetBasedBandgapModel(
+                num_elements=model_params["num_elements"],
+                embedding_dim=model_params["embedding_dim"],
+                num_fidelities=model_params["num_fidelities"],
+                fidelity_dim=model_params["fidelity_dim"],
+                num_blocks=model_params["num_blocks"],
+                num_heads=model_params["num_heads"],
+                hidden_dim=model_params["hidden_dim"],
+                dropout=model_params["dropout"],
+                pooling_type=model_params["pooling_type"],
+                pooling_params=model_params.get("pooling_params", None)
+            )
+         return model
+
+
+    def load_data(self, save_path):
+        combined_train_df = pd.read_csv(os.path.join(save_path, "combined_train.csv"))
+        combined_val_df = pd.read_csv(os.path.join(save_path, "combined_val.csv")) 
+        test_path = os.path.join(save_path, "test")
+        test_datasets = {}
+        for fidelity_name in self.fidelity_map.keys():
+            if self.subsample_dict[fidelity_name] == 0:
+                continue
+            test_datasets[fidelity_name] = pd.read_csv(os.path.join(test_path, f"{fidelity_name}.csv"))
+        return combined_train_df, combined_val_df, test_datasets
+
+
+
+    def create_test_dataloader(self, test_df, preprocess, mean, std,):
+        """
+        Create a DataLoader for a test dataset.
+        """
+        # Process the test data
+        test_data = []
+        for idx, row in test_df.iterrows():
+            element_ids, element_weights = preprocess.formula_to_set_representation(
+                row['formula'])
+            test_data.append((element_ids, element_weights,
+                              int(row['fidelity']), row[self.property_name]))
+
+        # Apply normalization
+        normalized_test_data = []
+        for element_ids, element_weights, fid, prop in test_data:
+            normalized_test_data.append(
+                (element_ids, element_weights, fid, (prop - mean) / std))
+
+        # Create a DataLoader
+        test_loader = torch.utils.data.DataLoader(
+            normalized_test_data,
+            batch_size=self.training_params["batch_size"],
+            shuffle=False,
+            collate_fn=preprocess.collate_fn
+        )
+        return test_loader
+
+    def train_multifidelity_model(self, combined_train_df, combined_val_df, run_id = None, model_params=None, pooling_type="gated", trial=None,):
+        """
+        Train a multi-fidelity model using the  combined training dataset.
+        """
+        if model_params is None:
+            model_params = self.model_params
         
-    Returns:
-        tuple: (model, mean, std, preprocess)
-            - model: Trained model
-            - mean: Mean value used for normalization
-            - std: Standard deviation used for normalization
-            - preprocess: MultiFidelityPreprocessing instance
-    """
-    # Save the combined training dataset
-    os.makedirs("data", exist_ok=True)
-    combined_train_df.to_csv("data/multifidelity_train.csv", index=False)
-    
-    # Initialize preprocessing
-    preprocess = MultiFidelityPreprocessing()
-    preprocess.sample_size = None  # Use all data
-    preprocess.batch_size = 32
-    
-    # Calculate normalization statistics
-    mean = combined_train_df['BG'].mean()
-    std = combined_train_df['BG'].std()
-    
-    # Process the training data
-    train_data = []
-    for idx, row in combined_train_df.iterrows():
-        element_ids, element_weights = preprocess.formula_to_set_representation(row['formula'])
-        train_data.append((element_ids, element_weights, int(row['fidelity']), row['BG']))
-    
-    # Apply normalization
-    normalized_train_data = []
-    for element_ids, element_weights, fid, bg in train_data:
-        normalized_train_data.append((element_ids, element_weights, fid, (bg - mean) / std))
-    
-    # Split into train/validation
-    train_size = int(0.9 * len(normalized_train_data))
-    val_size = len(normalized_train_data) - train_size
-    
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        normalized_train_data,
-        [train_size, val_size],
-        generator=torch.Generator().manual_seed(42)
-    )
-    
-    # Create DataLoaders
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=preprocess.batch_size,
-        shuffle=True,
-        collate_fn=preprocess.collate_fn
-    )
-    
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=preprocess.batch_size,
-        shuffle=False,
-        collate_fn=preprocess.collate_fn
-    )
-    
-    print(f"Data processed: {len(train_dataset)} training samples, {len(val_dataset)} validation samples")
-    
-    # Initialize model, loss function, and optimizer
-    model = SetBasedBandgapModel(
-        num_elements=118,
-        embedding_dim=104,
-        fidelity_dim=16,
-        num_blocks=5,
-        num_heads=10,
-        hidden_dim=250,
-        dropout=0.1,
-        pooling_type=pooling_type
-    )
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    model.to(device)
-    
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True
-    )
-    
-    # Training settings
-    num_epochs = 120
-    train_losses = []
-    val_losses = []
-    best_val_loss = float('inf')
-    patience = 15  # Early stopping patience
-    patience_counter = 0
-    
-    # Create directory for saving predictions
-    os.makedirs("predictions/multifidelity", exist_ok=True)
-    
-    # Training loop
-    for epoch in range(num_epochs):
-        # Train
-        model.train()
-        running_train_loss = 0.0
-        
-        for element_ids, element_weights, fidelity_ids, bandgaps in train_dataloader:
-            element_ids = element_ids.to(device)
-            element_weights = element_weights.to(device)
-            fidelity_ids = fidelity_ids.to(device)
-            bandgaps = bandgaps.to(device)
+        # global save_prefix  # Ensure we're using the globally set save_prefix
+
+        # Define paths for saving, prefixed if GOOGLE_DRIVE is True
+        trial_folder = ""
+        if trial:
+            trial_folder = "trials"
             
-            optimizer.zero_grad()
-            predictions = model(element_ids, fidelity_ids, element_weights)
-            loss = criterion(predictions, bandgaps)
-            
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            loss.backward()
-            optimizer.step()
-            
-            running_train_loss += loss.item() * len(bandgaps)
+        runs_path = os.path.join(
+            self.save_prefix, "runs", trial_folder)
+        #combined_train_df = combined_train_df.drop_duplicates()
+        # Save the combined training dataset
+       
+        #combined_train_csv_path = os.path.join(
+        #    data_dir_path, "multifidelity_train.csv")
+        #combined_train_df.to_csv(combined_train_csv_path, index=False)
+        #print(f"Combined training data saved to: {combined_train_csv_path}")
+
+        # Initialize preprocessing
+        preprocess = MultiFidelityPreprocessing()
+        preprocess.batch_size = self.training_params["batch_size"]
+
+        # Calculate normalization statistics
+        mean = combined_train_df[self.property_name].mean()
+        std = combined_train_df[self.property_name].std()
+
+        # Process the training data
         
-        epoch_train_loss = running_train_loss / len(train_dataset)
+        normalized_train_data = []
+        for idx, row in combined_train_df.iterrows():
+            element_ids, element_weights = preprocess.formula_to_set_representation(
+                row['formula'])
+            normalized_train_data.append((element_ids, element_weights,
+                               int(row['fidelity']), (row[self.property_name]-mean)/std))
+        normalized_val_data = []
+        for idx, row in combined_val_df.iterrows():
+            element_ids, element_weights = preprocess.formula_to_set_representation(
+                row['formula'])
+            normalized_val_data.append((element_ids, element_weights,
+                               int(row['fidelity']), (row[self.property_name]-mean)/std))
+        val_size = len(normalized_val_data)
+        train_size = len(normalized_train_data)
+        # Create DataLoaders
+        train_dataloader = torch.utils.data.DataLoader(
+            normalized_train_data,
+            batch_size=preprocess.batch_size,
+            shuffle=True,
+            collate_fn=preprocess.collate_fn
+        )
+
+        val_dataloader = torch.utils.data.DataLoader(
+            normalized_val_data,
+            batch_size=preprocess.batch_size,
+            shuffle=False,
+            collate_fn=preprocess.collate_fn
+        )
+
+        # Initialize model, loss function, and optimizer
+        if self.model_params:
+            model = SetBasedBandgapModel(
+                num_elements=self.model_params["num_elements"],
+                embedding_dim=self.model_params["embedding_dim"],
+                num_fidelities=self.model_params["num_fidelities"],
+                fidelity_dim=self.model_params["fidelity_dim"],
+                num_blocks=self.model_params["num_blocks"],
+                num_heads=self.model_params["num_heads"],
+                hidden_dim=self.model_params["hidden_dim"],
+                dropout=self.model_params["dropout"],
+                pooling_type=self.model_params["pooling_type"],
+                pooling_params=self.model_params.get("pooling_params", None)
+            )
+
+        device = torch.device("cuda" if torch.cuda.is_available(
+        ) else "cpu" if torch.backends.mps.is_available() else "cpu")
+        print(f"Using device: {device}")
+        self.device = device
+        model.to(device)
+        # model = torch.compile(model, mode ="default")
+        learning_rate = self.training_params.get("learning_rate", 0.001)
+        weight_decay = self.training_params.get("weight_decay", 1e-5)
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=5,
+        )
+
+        # Training settings
+        num_epochs = self.training_params["epochs"]
+        train_losses = []
+        val_losses = []
+        best_val_loss = float('inf')
+        patience_val = 15  # Renamed from patience to avoid conflict with module
+        patience_counter = 0
+        if not run_id:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:4]
+            run_id = f"run_{timestamp}_{unique_id}"
+        run_path = os.path.join(runs_path, run_id)
+        # Create directory for saving predictions
+        os.makedirs(run_path, exist_ok=True)
+        best_model_path = os.path.join(
+                run_path, f"best_model_{run_id}.pt")
+        with open(os.path.join(run_path, "model_params.json"), "w") as f:
+            json.dump(self.model_params,f, indent = 4)
+        with open(os.path.join(run_path,"training_params.json"), 'w') as f:
+            serializable_params = self.training_params
+            if "trial" in serializable_params.keys():
+                serializable_params.pop("trial")
+            json.dump(serializable_params, f, indent = 4)
         
-        # Validate
-        model.eval()
-        running_val_loss = 0.0
-        
-        with torch.no_grad():
-            for element_ids, element_weights, fidelity_ids, bandgaps in val_dataloader:
+        # Training loop
+        for epoch in range(num_epochs):
+            model.train()
+            running_train_loss = 0.0
+
+            for element_ids, element_weights, fidelity_ids, bandgaps in train_dataloader:
                 element_ids = element_ids.to(device)
                 element_weights = element_weights.to(device)
                 fidelity_ids = fidelity_ids.to(device)
                 bandgaps = bandgaps.to(device)
-                
-                val_preds = model(element_ids, fidelity_ids, element_weights)
-                val_loss = criterion(val_preds, bandgaps)
-                
-                running_val_loss += val_loss.item() * len(bandgaps)
-        
-        epoch_val_loss = running_val_loss / len(val_dataset)
-        
-        # Update learning rate scheduler
-        scheduler.step(epoch_val_loss)
-        
-        # Store losses
-        train_losses.append(epoch_train_loss)
-        val_losses.append(epoch_val_loss)
-        
-        # Print progress
-        print(f"Epoch [{epoch+1}/{num_epochs}] "
-              f"Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f}")
-        
-        # Check for best model
-        if epoch_val_loss < best_val_loss:
-            best_val_loss = epoch_val_loss
-            patience_counter = 0
-            # Save best model
-            torch.save(model.state_dict(), f"predictions/multifidelity/best_model_{pooling_type}.pt")
-            print(f"New best model saved with validation loss: {best_val_loss:.4f}")
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print(f"Early stopping after {epoch+1} epochs")
-                break
-    
-    # Plot training and validation loss
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(1, len(train_losses) + 1), train_losses, label='Train Loss')
-    plt.plot(range(1, len(val_losses) + 1), val_losses, label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('MSE Loss')
-    plt.title('Multi-Fidelity Model: Training and Validation Loss')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f"predictions/multifidelity/train_val_loss_{pooling_type}.png")
-    
-    # Load best model for testing
-    model.load_state_dict(torch.load(f"predictions/multifidelity/best_model_{pooling_type}.pt"))
-    
-    return model, mean, std, preprocess
+                optimizer.zero_grad()
+                predictions = model(element_ids, fidelity_ids, element_weights)
+                loss = criterion(predictions, bandgaps)
 
-def evaluate_on_fidelity(model, test_loader, fidelity_name, device, mean, std):
-    """
-    Evaluate the model on a specific fidelity dataset.
-    
-    Args:
-        model: Trained model
-        test_loader: DataLoader for the specific fidelity test set
-        fidelity_name: Name of the fidelity
-        device: Device to run evaluation on
-        mean: Mean value for denormalization
-        std: Standard deviation for denormalization
-        
-    Returns:
-        tuple: Metrics (MAE, RMSE, R²) and predictions/targets for plotting
-    """
-    model.eval()
-    predictions = []
-    targets = []
-    
-    with torch.no_grad():
-        for element_ids, element_weights, fidelity_ids, bandgaps in test_loader:
-            element_ids = element_ids.to(device)
-            element_weights = element_weights.to(device)
-            fidelity_ids = fidelity_ids.to(device)
-            bandgaps = bandgaps.to(device)
-            
-            preds = model(element_ids, fidelity_ids, element_weights)
-            
-            # Denormalize
-            preds_orig = preds.cpu().numpy() * std + mean
-            targets_orig = bandgaps.cpu().numpy() * std + mean
-            
-            predictions.extend(preds_orig.tolist())
-            targets.extend(targets_orig.tolist())
-    
-    # Calculate metrics
-    mae = mean_absolute_error(targets, predictions)
-    rmse = np.sqrt(mean_squared_error(targets, predictions))
-    r2 = r2_score(targets, predictions)
-    
-    return {'mae': mae, 'rmse': rmse, 'r2': r2}, predictions, targets
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=1.0)
 
-def plot_fidelity_results(predictions, targets, fidelity_name, metrics):
-    """
-    Generate plots for a specific fidelity evaluation.
-    
-    Args:
-        predictions: List of model predictions
-        targets: List of actual values
-        fidelity_name: Name of the fidelity
-        metrics: Dictionary of performance metrics
-    """
-    # Create directory for fidelity plots
-    os.makedirs("predictions/multifidelity/fidelity_plots", exist_ok=True)
-    
-    # Scatter plot of actual vs predicted
-    plt.figure(figsize=(8, 8))
-    plt.scatter(targets, predictions, alpha=0.5)
-    
-    # Add diagonal line for reference
-    min_val = min(min(targets), min(predictions))
-    max_val = max(max(targets), max(predictions))
-    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
-    
-    # Add metrics to plot
-    plt.text(
-        0.05, 0.95, 
-        f"MAE: {metrics['mae']:.4f}\nRMSE: {metrics['rmse']:.4f}\nR²: {metrics['r2']:.4f}",
-        transform=plt.gca().transAxes,
-        bbox=dict(facecolor='white', alpha=0.8)
-    )
-    
-    plt.xlabel('Actual Bandgap (eV)')
-    plt.ylabel('Predicted Bandgap (eV)')
-    plt.title(f'Multi-Fidelity Model on {fidelity_name} Dataset')
-    plt.grid(True)
-    plt.savefig(f"predictions/multifidelity/fidelity_plots/{fidelity_name}_actual_vs_predicted.png")
-    plt.close()
-    
-    # Save predictions to CSV
-    df_preds = pd.DataFrame({
-        "Actual_BG": targets,
-        "Predicted_BG": predictions
-    })
-    df_preds.to_csv(f"predictions/multifidelity/fidelity_plots/{fidelity_name}_predictions.csv", index=False)
-    
-    # Return the plot file path for reference
-    return f"predictions/multifidelity/fidelity_plots/{fidelity_name}_actual_vs_predicted.png"
+                loss.backward()
+                optimizer.step()
 
-def create_summary_plot(results):
-    """
-    Create a summary plot showing performance across all fidelities.
-    
-    Args:
-        results: Dictionary with fidelity names as keys and metrics as values
-    """
-    # Extract metrics for plotting
-    fidelities = list(results.keys())
-    maes = [results[f]['mae'] for f in fidelities]
-    rmses = [results[f]['rmse'] for f in fidelities]
-    r2s = [results[f]['r2'] for f in fidelities]
-    
-    # Create a figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # Bar chart for MAE and RMSE
-    x = np.arange(len(fidelities))
-    width = 0.35
-    
-    ax1.bar(x - width/2, maes, width, label='MAE')
-    ax1.bar(x + width/2, rmses, width, label='RMSE')
-    ax1.set_ylabel('Error (eV)')
-    ax1.set_title('MAE and RMSE by Fidelity Level')
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(fidelities)
-    ax1.legend()
-    ax1.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # Bar chart for R²
-    ax2.bar(x, r2s, width, label='R²', color='green')
-    ax2.set_ylabel('R² Score')
-    ax2.set_title('R² Score by Fidelity Level')
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(fidelities)
-    ax2.set_ylim(0, 1)
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.savefig("predictions/multifidelity/performance_summary.png")
-    plt.close()
-    
-    # Save results to CSV
-    df_results = pd.DataFrame({
-        'Fidelity': fidelities,
-        'MAE': maes,
-        'RMSE': rmses,
-        'R2': r2s
-    })
-    df_results.to_csv("predictions/multifidelity/performance_summary.csv", index=False)
+                running_train_loss += loss.item() * len(bandgaps)
 
-def run_multifidelity_experiments():
-    """
-    Run the complete multi-fidelity training and evaluation workflow.
-    """
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # Prepare datasets
-    print("\n" + "="*50)
-    print("Preparing Datasets")
-    print("="*50 + "\n")
-    
-    combined_train_df, test_datasets = prepare_datasets_for_multifidelity()
-    
-    # Train multi-fidelity model
-    print("\n" + "="*50)
-    print("Training Multi-Fidelity Model")
-    print("="*50 + "\n")
-    
-    model, mean, std, preprocess = train_multifidelity_model(combined_train_df, pooling_type='gated')
-    
-    # Evaluate on each fidelity
-    results = {}
-    plot_paths = {}
-    
-    print("\n" + "="*50)
-    print("Evaluating on Individual Fidelity Datasets")
-    print("="*50 + "\n")
-    
-    for fidelity_name, test_df in test_datasets.items():
-        print(f"Evaluating on {fidelity_name} dataset...")
-        
-        # Create test DataLoader
-        test_loader = create_test_dataloader(test_df, preprocess, mean, std)
-        
-        # Evaluate
-        metrics, predictions, targets = evaluate_on_fidelity(
-            model, test_loader, fidelity_name, device, mean, std
+            epoch_train_loss = running_train_loss / train_size
+
+            model.eval()
+            running_val_loss = 0.0
+
+            with torch.no_grad():
+                for element_ids, element_weights, fidelity_ids, bandgaps in val_dataloader:
+                    element_ids = element_ids.to(device)
+                    element_weights = element_weights.to(device)
+                    fidelity_ids = fidelity_ids.to(device)
+                    bandgaps = bandgaps.to(device)
+
+                    val_preds = model(
+                        element_ids, fidelity_ids, element_weights)
+                    val_loss = criterion(val_preds, bandgaps)
+
+                    running_val_loss += val_loss.item() * len(bandgaps)
+
+            epoch_val_loss = running_val_loss / val_size
+            if trial:
+                trial.report(epoch_val_loss, epoch)
+                if self.optunize:
+                    if trial.should_prune():
+                        raise optuna.TrialPruned()
+            scheduler.step(epoch_val_loss)
+            train_losses.append(epoch_train_loss)
+            val_losses.append(epoch_val_loss)
+
+            print(f"Epoch [{epoch+1}/{num_epochs}] "
+                  f"Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f}")
+
+            if epoch_val_loss < best_val_loss:
+                best_val_loss = epoch_val_loss
+                patience_counter = 0
+                torch.save(model.state_dict(), best_model_path)
+                print(
+                    f"New best model saved to {best_model_path} with validation loss: {best_val_loss:.4f}")
+            else:
+                patience_counter += 1
+                if patience_counter >= patience_val:
+                    print(f"Early stopping after {epoch+1} epochs")
+                    break
+
+        # Plot training and validation loss
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(1, len(train_losses) + 1),
+                 train_losses, label='Train Loss')
+        plt.plot(range(1, len(val_losses) + 1), val_losses, label='Val Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('MSE Loss')
+        plt.title('Multi-Fidelity Model: Training and Validation Loss')
+        plt.legend()
+        plt.grid(True)
+        plot_loss_path = os.path.join(
+            run_path, f"train_val_loss_{pooling_type}.png")
+        plt.savefig(plot_loss_path)
+        print(f"Training/validation loss plot saved to: {plot_loss_path}")
+        plt.close()
+
+        # Load best model for testing
+        model.load_state_dict(torch.load(best_model_path))
+        print(f"Loaded best model from: {best_model_path}")
+
+        return model, preprocess, mean, std
+
+    def evaluate_on_fidelity(self, model, test_loader,  mean, std, device=None):
+        '''
+        Evaluates the given model on a test dataset with a specific fidelity, returning regression metrics.
+
+        Args:
+            model (torch.nn.Module): The model to evaluate.
+            test_loader (torch.utils.data.DataLoader): DataLoader providing test data batches.
+            mean (float or np.ndarray): Mean value(s) used for denormalizing predictions and targets.
+            std (float or np.ndarray): Standard deviation(s) used for denormalizing predictions and targets.
+            device (torch.device or str, optional): Device to run evaluation on. Defaults to self.device.
+
+        Returns:
+            Tuple[dict, list, list]:
+                - metrics (dict): Dictionary containing 'mae', 'rmse', and 'r2' regression metrics.
+                - predictions (list): List of denormalized model predictions.
+                - targets (list): List of denormalized ground truth values.
+        '''
+        model.eval()
+        predictions = []
+        targets = []
+        if device is None:
+            device = self.device
+        with torch.no_grad():
+            for element_ids, element_weights, fidelity_ids, bandgaps in test_loader:
+                element_ids = element_ids.to(device)
+                element_weights = element_weights.to(device)
+                fidelity_ids = fidelity_ids.to(device)
+                bandgaps = bandgaps.to(device)
+
+                preds = model(element_ids, fidelity_ids, element_weights)
+
+                preds_orig = preds.cpu().numpy() * std + mean
+                targets_orig = bandgaps.cpu().numpy() * std + mean
+
+                predictions.extend(preds_orig.tolist())
+                targets.extend(targets_orig.tolist())
+
+        mae = mean_absolute_error(targets, predictions)
+        rmse = np.sqrt(mean_squared_error(targets, predictions))
+        r2 = r2_score(targets, predictions)
+
+        return {'mae': mae, 'rmse': rmse, 'r2': r2}, predictions, targets
+
+    def plot_fidelity_results(self, predictions_dir, predictions, targets, fidelity_name, metrics):
+        """
+        Generate plots for a specific fidelity evaluation.
+        """
+
+        plt.figure(figsize=(8, 8))
+        plt.scatter(targets, predictions, alpha=0.5)
+
+        # Added default for empty lists
+        min_val = min(min(targets, default=0), min(predictions, default=0))
+        # Added default for empty lists
+        max_val = max(max(targets, default=1), max(predictions, default=1))
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
+
+        plt.text(
+            0.05, 0.95,
+            f"MAE: {metrics['mae']:.4f}\nRMSE: {metrics['rmse']:.4f}\nR²: {metrics['r2']:.4f}",
+            transform=plt.gca().transAxes,
+            bbox=dict(facecolor='white', alpha=0.8)
         )
-        results[fidelity_name] = metrics
-        
-        # Generate plots
-        plot_path = plot_fidelity_results(predictions, targets, fidelity_name, metrics)
-        plot_paths[fidelity_name] = plot_path
-        
-        print(f"  MAE: {metrics['mae']:.4f}")
-        print(f"  RMSE: {metrics['rmse']:.4f}")
-        print(f"  R²: {metrics['r2']:.4f}")
-        print()
-    
-    # Create a summary plot for all fidelities
-    create_summary_plot(results)
-    
-    # Print summary of results
-    print("\n" + "="*50)
-    print("MULTI-FIDELITY EXPERIMENT RESULTS SUMMARY")
-    print("="*50)
-    print(f"{'Fidelity':<10} {'MAE':<10} {'RMSE':<10} {'R²':<10}")
-    print("-"*50)
-    
-    for fidelity_name, metrics in results.items():
-        print(f"{fidelity_name:<10} {metrics['mae']:<10.4f} {metrics['rmse']:<10.4f} {metrics['r2']:<10.4f}")
-    
-    return results, plot_paths
 
-if __name__ == "__main__":
-    # Run the multi-fidelity experiments
-    results, plot_paths = run_multifidelity_experiments()
+        plt.xlabel('Actual Bandgap (eV)')
+        plt.ylabel('Predicted Bandgap (eV)')
+        plt.title(f'Multi-Fidelity Model on {fidelity_name} Dataset')
+        plt.grid(True)
+
+        plot_file_path = os.path.join(
+            predictions_dir, f"{fidelity_name}_actual_vs_predicted.png")
+        plt.savefig(plot_file_path)
+        plt.close()
+        print(f"Fidelity plot for {fidelity_name} saved to: {plot_file_path}")
+
+        df_preds = pd.DataFrame({
+            f"Actual_{self.property_name}": targets,
+            f"Predicted_{self.property_name}": predictions
+        })
+        preds_csv_path = os.path.join(
+            predictions_dir, f"{fidelity_name}_predictions.csv")
+        df_preds.to_csv(preds_csv_path, index=False)
+        print(
+            f"Predictions CSV for {fidelity_name} saved to: {preds_csv_path}")
+
+    def load_model(self):
+        '''
+        Returns initialized model
+        '''
+        with open(self.model_params_path, 'r') as f:
+            model_params = json.load(f)
+        print("model_params")
+        print(model_params)
+        model = self.init_model(model_params=model_params)
+        self.model = model
+        model.to(self.device)  # Move model to device
+
+        # 2. Define path to your saved model
+        #    This path should point to where your best model was saved from a previous run.
+        #    It uses self.save_prefix and the pooling type from model_params.
+        #    If a trial number was used during saving, you'll need to specify that too.
+        #generate a uniqe id
+        
+        # Construct the model path carefully to match how it was saved.
+        # If saved with a trial number from Optuna:
+        # best_model_path = os.path.join(
+        #     predictions_dir_path, f"best_model_{self.model_params['pooling_type']}_trial_YOUR_TRIAL_NUMBER.pt"
+        # )
+        # If saved without a specific trial number in the filename (as per your training code's default):
+        best_model_path = os.path.join(self.trained_model_path)
+        print(f"  Attempting to load from: {best_model_path}")
+        try:
+            state_dict = torch.load(
+                best_model_path, map_location=self.device)
+            model.load_state_dict(state_dict)
+            print("  Successfully loaded model weights.")
+            return model
+        except FileNotFoundError:
+            print(
+                f"  ERROR: Model file not found at {best_model_path}. Halting.")
+            return {}, {}  # Or handle error appropriately
+        except Exception as e:
+            print(f"  ERROR loading model: {e}. Halting.")
+            return {}, {}  # Or handle error appropriately
+
+    def create_summary_plot(self, predictions_dir,results):
+        """
+        Create a summary plot showing performance across all fidelities.
+        """
+        
+        # Already created in train_multifidelity_model, but good to be sure
+        
+
+        fidelities = list(results.keys())
+        if not fidelities:
+            print("No results to create a summary plot.")
+            return
+
+        maes = [results[f]['mae'] for f in fidelities]
+        rmses = [results[f]['rmse'] for f in fidelities]
+        r2s = [results[f]['r2'] for f in fidelities]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        x = np.arange(len(fidelities))
+        width = 0.35
+
+        ax1.bar(x - width/2, maes, width, label='MAE')
+        ax1.bar(x + width/2, rmses, width, label='RMSE')
+        ax1.set_ylabel('Error (eV)')
+        ax1.set_title('MAE and RMSE by Fidelity Level')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(fidelities)
+        ax1.legend()
+        ax1.grid(axis='y', linestyle='--', alpha=0.7)
+
+        ax2.bar(x, r2s, width, label='R²', color='green')
+        ax2.set_ylabel('R² Score')
+        ax2.set_title('R² Score by Fidelity Level')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(fidelities)
+        # Adjust y-lim for R2
+        ax2.set_ylim(min(0, min(r2s if r2s else [0])), 1)
+        ax2.grid(axis='y', linestyle='--', alpha=0.7)
+
+        plt.tight_layout()
+        summary_plot_path = os.path.join(
+            predictions_dir, "performance_summary.png")
+        plt.savefig(summary_plot_path)
+        plt.close()
+        print(f"Performance summary plot saved to: {summary_plot_path}")
+
+        df_results = pd.DataFrame({
+            'Fidelity': fidelities,
+            'MAE': maes,
+            'RMSE': rmses,
+            'R2': r2s
+        })
+        summary_csv_path = os.path.join(predictions_dir, "performance_summary.csv")
+        df_results.to_csv(summary_csv_path, index=False)
+        print(f"Performance summary CSV saved to: {summary_csv_path}")
+
+    def run_multifidelity_experiments(self):
+        """
+        Run the complete multi-fidelity training and evaluation workflow.
+        """
+        save_prefix = self.save_prefix  # Crucial for functions below to know the correct base path
+        
+        # --- Google Drive Mounting and Path Setup ---
+        if self.GOOGLE_DRIVE:
+            try:
+                from google.colab import drive
+                drive.mount(self.DRIVE_MOUNT_POINT, force_remount=True)
+                save_prefix = self.DRIVE_BASE_SAVE_PATH  # Set the global prefix
+            except Exception as e:
+                save_prefix = ""  # Fallback to local saving
+        # --- End of Google Drive Setup ---
+        runs_path = os.path.join(
+            save_prefix, "runs")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:4]
+        if self.load_trained:
+            run_id = f"run_from_trained_{timestamp}_{unique_id}"
+        else:
+            run_id = f"run_{timestamp}_{unique_id}"
+        run_path = os.path.join(runs_path, run_id)
+        os.makedirs(run_path, exist_ok=True)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        print("\n" + "="*50)
+        print("Preparing Datasets")
+        print("="*50 + "\n")
+
+        if self.training_params["load_data"] == True:
+            self.data_path = self.training_params["load_path"]
+            combined_train_df, combined_val_df, test_datasets = self.load_data(self.data_path)
+        else:
+            combined_train_df, combined_val_df, _,_,test_datasets = prepare_datasets(split_arr = self.training_params["split_arr"])
+
+        mean = combined_train_df[self.property_name].mean()
+        std = combined_train_df[self.property_name].std()
+
+        print("\n" + "="*50)
+        print("Training Multi-Fidelity Model")
+        print("="*50 + "\n")
+        # Pass model_params from the __main__ block
+        predictions_dir_path = os.path.join(run_path, "predictions")
+        os.makedirs(predictions_dir_path, exist_ok=True)
+        if self.load_trained:
+            print("Loading pre-trained model...")
+            
+            with open(self.model_params_path, 'r') as f:
+                model_params = json.load(f)
+            model = self.init_model(model_params=model_params)
+
+            model.to(self.device)  # Move model to device
+
+            # 2. Define path to your saved model
+            #    This path should point to where your best model was saved from a previous run.
+            #    It uses self.save_prefix and the pooling type from model_params.
+            #    If a trial number was used during saving, you'll need to specify that too.
+            #generate a uniqe id
+            
+  
+            predictions_dir_path = os.path.join(run_path, "predictions")
+            os.makedirs(predictions_dir_path, exist_ok=True)
+            with open(os.path.join(predictions_dir_path, "used_model_params.json"),"w") as f:
+                json.dump(model_params, f)
+            
+            # Construct the model path carefully to match how it was saved.
+            # If saved with a trial number from Optuna:
+            # best_model_path = os.path.join(
+            #     predictions_dir_path, f"best_model_{self.model_params['pooling_type']}_trial_YOUR_TRIAL_NUMBER.pt"
+            # )
+            # If saved without a specific trial number in the filename (as per your training code's default):
+            best_model_path = os.path.join(self.trained_model_path)
+            print(f"  Attempting to load from: {best_model_path}")
+            try:
+                state_dict = torch.load(
+                    best_model_path, map_location=self.device)
+                model.load_state_dict(state_dict)
+                print("  Successfully loaded model weights.")
+            except FileNotFoundError:
+                print(
+                    f"  ERROR: Model file not found at {best_model_path}. Halting.")
+                return {}, {}  # Or handle error appropriately
+            except Exception as e:
+                print(f"  ERROR loading model: {e}. Halting.")
+                return {}, {}  # Or handle error appropriately
+
+            # 4. Set to evaluation mode
+            preprocess = MultiFidelityPreprocessing()
+            model.eval()
+        else:
+            model, preprocess, mean, std = self.train_multifidelity_model(
+                combined_train_df, combined_val_df, run_id=run_id, model_params=self.model_params, pooling_type=self.model_params.get('pooling_type', 'gated'))
+
+        results = {}
+        plot_paths = {}
+
+        print("\n" + "="*50)
+        print("Evaluating on Individual Fidelity Datasets")
+        print("="*50 + "\n")
+
+        if not test_datasets:
+            print("No test datasets to evaluate. Skipping evaluation.")
+        else:
+            for fidelity_name, test_df in test_datasets.items():
+                print(f"Evaluating on {fidelity_name} dataset...")
+
+                test_loader = self.create_test_dataloader(
+                    test_df, preprocess, mean, std)
+                metrics, predictions, targets = self.evaluate_on_fidelity(
+                    model, test_loader, mean, std, device=device
+                )
+                results[fidelity_name] = metrics
+                plot_path = self.plot_fidelity_results(predictions_dir_path,
+                    predictions, targets, fidelity_name, metrics)
+                plot_paths[fidelity_name] = plot_path
+                print(f"  MAE: {metrics['mae']:.4f}")
+                print(f"  RMSE: {metrics['rmse']:.4f}")
+                print(f"  R²: {metrics['r2']:.4f}")
+                print()
+
+        if results:
+            self.create_summary_plot(predictions_dir_path, results)
+        else:
+            print("No results from evaluation to summarize.")
+
+        print("\n" + "="*50)
+        print("MULTI-FIDELITY EXPERIMENT RESULTS SUMMARY")
+        print("="*50)
+        if results:
+            print(f"{'Fidelity':<10} {'MAE':<10} {'RMSE':<10} {'R²':<10}")
+            print("-"*50)
+            for fidelity_name, metrics in results.items():
+                print(
+                    f"{fidelity_name:<10} {metrics['mae']:<10.4f} {metrics['rmse']:<10.4f} {metrics['r2']:<10.4f}")
+        else:
+            print("No results to display.")
+
+        return results, plot_paths
+
+'''
+   def prepare_datasets_for_multifidelity(self, subsample_dict=None):
+        """
+        Prepare datasets for multi-fidelity training and individual fidelity testing.
+        """
+        if subsample_dict is None:
+            subsample_dict = self.subsample_dict
+
+        combined_train_df = pd.DataFrame()
+        test_datasets = {}
+        train_split = self.training_params["multi_train_split"]
+
+        # Process each fidelity dataset
+        for fidelity_name, fidelity_id in self.fidelity_map.items():
+            print(f"Processing {fidelity_name} dataset...")
+
+            # Construct path for loading data
+            # Assumes input data is in 'data/train/' relative to save_prefix if GOOGLE_DRIVE is True
+            # Or locally if GOOGLE_DRIVE is False
+            data_file_path = os.path.join(
+                self.save_prefix, 'data', self.fidelities_dir, f'{fidelity_name}.csv')
+
+            # Fallback to local path if file not found at prefixed path (e.g., if inputs are always local)
+            # only try local if prefixed path failed AND prefix exists
+            if not os.path.exists(data_file_path) and self.save_prefix:
+                print(
+                    f"File not found at {data_file_path}, trying local path 'data/train/{fidelity_name}.csv'")
+                local_path_check = f'data/train/{fidelity_name}.csv'
+                if os.path.exists(local_path_check):
+                    data_file_path = local_path_check
+                else:
+                    print(
+                        f"ERROR: Data file for {fidelity_name} not found at {data_file_path} or {local_path_check}")
+                    print(
+                        "Please ensure your data .csv files (e.g., GGA.csv) are in the correct location:")
+                    print(
+                        f"  - If GOOGLE_DRIVE=True: In '{os.path.join(self.DRIVE_BASE_SAVE_PATH, 'data', 'train')}' on your Google Drive.")
+                    print(
+                        f"  - If GOOGLE_DRIVE=False: In the local './data/train/' directory.")
+                    print(f"Skipping {fidelity_name} dataset.")
+                    continue
+            # Not using drive and file not found locally
+            elif not os.path.exists(data_file_path) and not self.save_prefix:
+                print(
+                    f"ERROR: Data file for {fidelity_name} not found at {data_file_path}")
+                print(
+                    "Please ensure your data .csv files are in the local './data/train/' directory.")
+                print(f"Skipping {fidelity_name} dataset.")
+                continue
+
+            print(f"  Loading from: {data_file_path}")
+            df = pd.read_csv(data_file_path)
+
+            df = df.drop_duplicates()
+            df.dropna()
+            if self.subsample_dict:
+                sample_frac = self.subsample_dict.get(fidelity_name, 1)
+
+            df = df.sample(frac=sample_frac,
+                           random_state=42).reset_index(drop=True)
+
+            test_size = int((1-train_split) * len(df))
+            test_df = df.iloc[:test_size].copy()
+            train_df = df.iloc[test_size:].copy()
+            print(train_df.columns)
+
+            # Add fidelity column
+            train_df['fidelity'] = fidelity_id
+            test_df['fidelity'] = fidelity_id
+
+            # Store the test dataset
+            test_datasets[fidelity_name] = test_df
+
+            # Add training data to combined dataset
+            combined_train_df = pd.concat(
+                [combined_train_df, train_df], ignore_index=True)
+
+            print(
+                f"  Train: {len(train_df)} samples, Test: {len(test_df)} samples")
+
+        if combined_train_df.empty and self.fidelity_map:
+            print(
+                "WARNING: No data was loaded into combined_train_df. Check data paths and file availability.")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        folder_name = f"run_{timestamp}"
+        
+        save_path = os.path.join(self.save_prefix, 'data',"runs",folder_name)
+        combined_path =os.path.join(save_path, "combined_train.csv")
+        test_path = os.path.join(save_path, "test")
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        if not os.path.exists(test_path):
+            os.makedirs(test_path)    
+        combined_train_df.to_csv(combined_path)
+        for fidelity_name in self.fidelity_map.keys():
+            test_datasets[fidelity_name].to_csv(os.path.join(test_path, f"{fidelity_name}.csv"))
+        self.data_path = save_path
+        return combined_train_df, test_datasets
+    
+'''

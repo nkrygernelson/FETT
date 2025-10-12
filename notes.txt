@@ -1,0 +1,18 @@
+go through the training data.
+create the combined_df
+check how many compunds there are that have no intersection
+
+
+
+prepare datasets: 
+    creates tests_df list and the combined_df
+
+train_multi:
+    creates the dataloader from the combined and calls the test data loader creator
+
+idea is to creat a custom combined_train. 
+Do this by saving the datasets and loading them in after.
+
+Other idea ws to monkey patch them in.
+
+ok it loads, I will have to create a training parameter that specifies where to take the train/test from
