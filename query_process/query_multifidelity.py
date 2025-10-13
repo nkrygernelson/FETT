@@ -17,13 +17,12 @@ def MP_query():
             # Get materials data with task IDs and run types
             materials_docs = mpr.materials.search(
                 #material_ids=material_ids,
-                fields=["material_id", "formula_pretty", "task_ids", "run_types"]
+                fields=["material_id", "formula_pretty", "task_ids", "run_types",]
             )
-            
             # Create mappings
             formula_map = {}
+            e_form_map = {}
             task_run_maps = {}
-            
             for doc in materials_docs:
                 formula_map[doc.material_id] = doc.formula_pretty
                 task_run_maps[doc.material_id] = {
@@ -54,6 +53,7 @@ def MP_query():
             data.append({
                 "mp-id": material_id,
                 "formula": formula_map.get(material_id, ""),
+                "FE_per_atom":e_form_map.get(material_id, ""), 
                 "bandgap": doc.band_gap,
                 "Functional":task_run_maps.get(material_id, {}).get(task_id, "unknown")
             })
@@ -71,4 +71,5 @@ def matminer():
     df = load_dataset("expt_gap_kingsbury")
     print(df)
     df.to_csv("data/src/exp_data.csv", index=False)
-matminer()
+
+MP_query()

@@ -2,7 +2,7 @@
 from multi_main import MultiTrainer 
 import os
 
-load_path = os.path.join("data","runs","standard")
+load_path = os.path.join("data","runs","expanded")
 
 pooling_params = {} # num_motifs is empty in the table
 model_params = {
@@ -28,13 +28,13 @@ training_params = {
     "load_path": load_path
 }
 
-fidelity_map = {"pbe":0, "scan":1, "gllb-sc":2, "hse":3, "expt":4}
-subsample_dict = {"pbe": 1, "scan": 1, "gllb-sc": 1, "hse": 1, "expt": 1}
+fidelity_map = {"gga":0, "gga+u":1, "pbe_sol":2,"scan":3, "gllbsc":4, "hse":5,"expt":6}
+subsample_dict = {"gga":1, "gga+u":1, "pbe_sol":1,"scan":1, "gllbsc":1, "hse":1,"expt":1}
 
 trained_model_path = None
 trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
                        training_params=training_params,model_params_path=None,
-                       property_name="BG",
+                       property_name="bg",
                        trained_model_path=None, 
                        fidelity_map=fidelity_map, optunize=False,collab=True)
 results, plot_paths = trainer.run_multifidelity_experiments()

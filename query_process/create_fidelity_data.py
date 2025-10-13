@@ -4,6 +4,7 @@ from pymatgen.core import Structure
 from pymatgen.core import Composition
 from collections import Counter
 from mp_api.client import MPRester
+import os 
 def parse_gllbsc_json(json_file):
 
     def json_to_csv(input_file, output_file='materials_data.csv'):
@@ -107,7 +108,6 @@ def parse_snumat_json(json_file):
     #apply formula_from_list to the atoms column
     #full first row of df
     print(df.iloc[0])
-    print("sss")
     print(df['atoms'][0].keys())
     print(df['atoms'][0]['elements'])
     #print(formula_from_list(df['atoms'][0]['elements']))
@@ -139,4 +139,5 @@ def parse_exp_json():
 
 #parse_snumat_json("data/src/snumat.json") 
 #parse_gllbsc_json("data/src/gllbsc.json")
-parse_exp_json()
+path = os.path.join("/Users", "nicholaskryger-nelson","beemo", "Beemo","data", "src", "snumat.json")
+parse_snumat_json(path)

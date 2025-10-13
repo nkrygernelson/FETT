@@ -127,7 +127,7 @@ def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_ma
         # Assumes input data is in 'data/train/' relative to save_prefix if GOOGLE_DRIVE is True
         # Or locally if GOOGLE_DRIVE is False
         data_file_path = os.path.join(
-             'data',"mp19", f'{fidelity_name}.csv')
+             'data',"expanded", f'{fidelity_name}.csv')
 
         df = pd.read_csv(data_file_path)
 
@@ -264,3 +264,6 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8, ):
     combined_val_df.to_csv(os.path.join(general_path, "combined_val.csv",), index=False)
   
     return combined_train_df, combined_val_df, trains, vals, tests
+fidelity_map = {"gga":0, "gga+u":1, "pbe_sol":2,"scan":3, "gllbsc":4, "hse":5,"expt":6}
+subsample_dict = {"gga":1, "gga+u":1, "pbe_sol":1,"scan":1, "gllbsc":1, "hse":1,"expt":1}
+prepare_datasets(subsample_dict=subsample_dict,fidelity_map=fidelity_map, prop_name = "bg", dataset_name="expanded")
