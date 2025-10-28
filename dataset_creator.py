@@ -6,7 +6,7 @@ import datetime
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+random_state = 42
 def show_dist(df1, df2, df1_name='Test', df2_name='Train'):
     """
     TODO: make it work with any property not just bg
@@ -143,12 +143,12 @@ def prepare_datasets(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_ma
         train,test = train_test_split(data[fidelity_name],
             train_size=1-test_split,
             stratify=data[fidelity_name][f'{prop_name}_category'],
-            random_state=42 
+            random_state=random_state 
         )
         train, val = train,test = train_test_split(train,
             train_size=train_split/(train_split+val_split),
             stratify=train[f'{prop_name}_category'],
-            random_state=42 
+            random_state=random_state 
         )
         trains[fidelity_name] = train
         tests[fidelity_name] = test
@@ -217,12 +217,12 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8, ):
     expt_train, expt_test = train_test_split(data["expt"],
                 train_size=1-test_split,
                 stratify=data["expt"][f"bg_category"],
-                random_state=42 
+                random_state=random_state 
             )
     expt_train, expt_val = train_test_split(expt_train,
                 train_size=train_split/(train_split+val_split),
                 stratify=expt_train[f"bg_category"],
-                random_state=42 
+                random_state=random_state 
             )
     
     
@@ -236,12 +236,12 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8, ):
             train,test = train_test_split(data[fidelity_name],
                 train_size=1-test_split,
                 stratify=data[fidelity_name]['bg_category'],
-                random_state=42 
+                random_state=random_state 
             )
             train, val = train,test = train_test_split(train,
                 train_size=train_split/(train_split+val_split),
                 stratify=train['bg_category'],
-                random_state=42 
+                random_state=random_state 
             )
             trains[fidelity_name] = train
             tests[fidelity_name] = test
@@ -264,6 +264,137 @@ def prepare_only_new_on_expt(split_arr = [0.6,0.2,0.2], num_bins=8, ):
     combined_val_df.to_csv(os.path.join(general_path, "combined_val.csv",), index=False)
   
     return combined_train_df, combined_val_df, trains, vals, tests
-fidelity_map = {"gga":0, "gga+u":1, "pbe_sol":2,"scan":3, "gllbsc":4, "hse":5,"expt":6}
-subsample_dict = {"gga":1, "gga+u":1, "pbe_sol":1,"scan":1, "gllbsc":1, "hse":1,"expt":1}
-prepare_datasets(subsample_dict=subsample_dict,fidelity_map=fidelity_map, prop_name = "bg", dataset_name="expanded")
+
+def prepare_datasets_translate(split_arr = [0.6,0.2,0.2], subsample_dict=None, fidelity_map = None,  num_bins=8, prop_name = "BG",dataset_name = "translate"):
+    """
+    """
+    train_split = split_arr[0]
+    test_split = split_arr[1]
+    val_split = split_arr[2]
+    if not subsample_dict:
+        subsample_dict = {"gga":1, "gga+u":1, "pbe_sol":1,"scan":1, "gllbsc":1, "hse":1,"expt":1}       
+    if not fidelity_map:
+        fidelity_map = {"gga":0, "gga+u":1, "pbe_sol":2,"scan":3, "gllbsc":4, "hse":5,"expt":6}
+    
+    data = {}
+    trains = {}
+    tests = {}
+    vals = {}
+    general_path = os.path.join("data","runs", dataset_name)
+    if not os.path.exists(general_path):
+        os.makedirs(general_path)
+    all_dfs = []
+    for fidelity_name, fidelity_id in fidelity_map.items():
+        data_file_path = os.path.join('data', "expanded", f'{fidelity_name}.csv')
+        try:
+            # Load the CSV
+            df = pd.read_csv(data_file_path)
+            # Add the fidelity info right away
+            df['fidelity_id'] = fidelity_id
+            # Optional, but nice to have
+            df['fidelity_name'] = fidelity_name 
+            
+            all_dfs.append(df)
+        except FileNotFoundError:
+            print(f"Warning: File not found {data_file_path}, skipping.")
+
+    # Combine into one big dataframe
+    master_df = pd.concat(all_dfs, ignore_index=True)
+
+    # We only need these columns for the pairing
+    core_data = master_df[['formula', 'bg', 'fidelity_id']]
+
+
+    # --- 2. Perform a single "self-merge" ---
+    # This pairs every formula with every other formula
+    paired_df = pd.merge(
+        core_data,
+        core_data,
+        on='formula',
+        suffixes=('_1', '_2') # Creates 'bandgap_1', 'fidelity_id_1', etc.
+    )
+
+    # --- 3. Filter the results ---
+
+    # Remove rows where it's the same fidelity paired with itself
+    paired_df = paired_df[paired_df['fidelity_id_1'] != paired_df['fidelity_id_2']]
+
+    # Optional: Remove duplicates
+    # This removes (A, B) if (B, A) already exists
+    paired_df = paired_df[paired_df['fidelity_id_1'] < paired_df['fidelity_id_2']]
+
+
+    # --- 4. Final Result ---
+    # Reorder columns to your desired format
+    translation_df = paired_df[[
+        'formula', 
+        'bg_1', 
+        'fidelity_id_1', 
+        'bg_2', 
+        'fidelity_id_2'
+    ]]
+
+    train,test = train_test_split(translation_df,
+            train_size=1-test_split,
+            random_state=random_state 
+        )
+    train, val = train,test = train_test_split(train,
+            train_size=train_split/(train_split+val_split),
+            random_state=random_state 
+        )
+    train_df = pd.DataFrame(train)
+    val_df = pd.DataFrame(val)
+    test_df = pd.DataFrame(test)
+    train_df.to_csv(os.path.join(general_path, "train_combined.csv"), index= False)
+    test_df.to_csv(os.path.join(general_path, "test_combined.csv"), index= False)
+    val_df.to_csv(os.path.join(general_path, "val_combined.csv"), index= False)
+
+
+    
+    '''
+    print(f"Processing {fidelity_name} dataset...")
+    # Construct path for loading data
+    # Assumes input data is in 'data/train/' relative to save_prefix if GOOGLE_DRIVE is True
+    # Or locally if GOOGLE_DRIVE is False
+    data_file_path = os.path.join(
+            'data',"expanded", f'{fidelity_name}.csv')
+
+    df = pd.read_csv(data_file_path)
+
+    df = df.drop_duplicates()
+    df.dropna()
+    df["fidelity"] = fidelity_id
+    data[fidelity_name] = df
+
+    combined_train_df = pd.DataFrame()
+    combined_val_df = pd.DataFrame()
+    for fidelity_name in data.keys():
+        data[fidelity_name] = prop_binning(data[fidelity_name], num_bins = num_bins,prop_name=prop_name)
+        train,test = train_test_split(data[fidelity_name],
+            train_size=1-test_split,
+            stratify=data[fidelity_name][f'{prop_name}_category'],
+            random_state=random_state 
+        )
+        train, val = train,test = train_test_split(train,
+            train_size=train_split/(train_split+val_split),
+            stratify=train[f'{prop_name}_category'],
+            random_state=random_state 
+        )
+        trains[fidelity_name] = train
+        tests[fidelity_name] = test
+        vals[fidelity_name] = val
+
+        combined_val_df = pd.concat([combined_val_df, val.drop(columns = f"{prop_name}_category")])
+        combined_train_df = pd.concat([combined_train_df, train.drop(columns = f"{prop_name}_category")])
+        tests[fidelity_name].to_csv(os.path.join(general_path, "test",f"{fidelity_name}.csv"), index=False)
+        trains[fidelity_name].to_csv(os.path.join(general_path, "train",f"{fidelity_name}.csv"), index= False)
+        vals[fidelity_name].to_csv(os.path.join(general_path, "val",f"{fidelity_name}.csv"), index= False)
+
+    combined_train_df.to_csv(os.path.join(general_path, "combined_train.csv",), index=False)
+    combined_val_df.to_csv(os.path.join(general_path, "combined_val.csv",), index=False)
+    '''
+    
+    return train_df, val_df, test_df
+prepare_datasets_translate()
+
+

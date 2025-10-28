@@ -1,0 +1,5 @@
+plan for this work session:
+First train a translation model by adding a layer
+Second is adding a training step where Javier's data is included, 
+hyper parameter tune the learning rate so that the perfroamce on the other sets doesn't drop 
+and it does well on the translation task

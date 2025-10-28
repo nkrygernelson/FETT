@@ -10,7 +10,7 @@ model_params = {
     "fidelity_dim": 20,
     "hidden_dim": 288,
     "num_blocks": 5,
-    "num_fidelities":5,
+    "num_fidelities":7,
     "num_elements":118,
     "num_heads": 16,
     "dropout": 0.17912079167770537,

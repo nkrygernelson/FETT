@@ -339,3 +339,34 @@ class MultiFidelityPreprocessing:
         
         # Return dataloaders and normalization parameters
         return train_dataloader, val_dataloader, test_dataloader, mean, std
+
+
+class TranslationPreprocessing(MultiFidelityPreprocessing):
+    """
+    Preprocessing for the translation task. Inherits formula_to_set_representation
+    from MultiFidelityPreprocessing but provides its own collate function.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def collate_fn(self, batch):
+        """
+        Collate function for the translation task.
+
+        Args:
+            batch: List of (element_ids, element_weights, fid1, fid2, bg1, bg2) tuples.
+
+        Returns:
+            Tensors for each part of the batch.
+        """
+        element_ids, element_weights, fid1, fid2, bg1, bg2 = zip(*batch)
+
+        element_ids_batch = torch.tensor(element_ids, dtype=torch.long)
+        element_weights_batch = torch.tensor(
+            element_weights, dtype=torch.float32)
+        fid1_batch = torch.tensor(fid1, dtype=torch.long)
+        fid2_batch = torch.tensor(fid2, dtype=torch.long)
+        bg1_batch = torch.tensor(bg1, dtype=torch.float32)
+        bg2_batch = torch.tensor(bg2, dtype=torch.float32)  # Target
+
+        return element_ids_batch, element_weights_batch, fid1_batch, fid2_batch, bg1_batch, bg2_batch
