@@ -15,12 +15,12 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 
 # --- Configuration ---
-collab = True # Set to True to save to Google Drive
+collab = False # Set to True to save to Google Drive
 load_path = os.path.join("data", "runs", "translate")
 
 # --- Load Pre-trained Model ---
-trained_model_path = os.path.join("models", "expanded_bg", "bg_expanded_best.pt")
-model_params_path = os.path.join("models", "expanded_bg", "model_params.json")
+trained_model_path = os.path.join("models", "javier_finetuned", "javier_finetuned.pt")
+model_params_path = os.path.join("models", "javier_finetuned", "model_params.json")
 
 # We need to instantiate the trainer to use its helper methods for loading
 trainer = MultiTrainer(
@@ -38,8 +38,8 @@ os.makedirs(output_dir, exist_ok=True)
 
 # --- Data Scaling (from original model's training data) ---
 original_train_df = pd.read_csv(os.path.join("data", "runs", "expanded", "combined_train.csv"))
-bg_mean = original_train_df['BG'].mean()
-bg_std = original_train_df['BG'].std()
+bg_mean = original_train_df['bg'].mean()
+bg_std = original_train_df['bg'].std()
 
 # --- Data Loading ---
 # We only need the test set for this evaluation task.

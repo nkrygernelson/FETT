@@ -1,0 +1,12 @@
+{
+    "embedding_dim": 172,
+    "fidelity_dim": 20,
+    "hidden_dim": 288,
+    "num_blocks": 5,
+    "num_fidelities": 7,
+    "num_elements": 118,
+    "num_heads": 16,
+    "dropout": 0.17912079167770537,
+    "pooling_type": "weighted",
+    "pooling_params": {}
+}

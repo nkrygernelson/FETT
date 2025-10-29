@@ -126,8 +126,8 @@ class TranslationModel(nn.Module):
 # --- Data Scaling ---
 # Load the original training data to get the scaling parameters (mean and std)
 original_train_df = pd.read_csv(os.path.join("data", "runs", "expanded", "combined_train.csv"))
-bg_mean = original_train_df['BG'].mean()
-bg_std = original_train_df['BG'].std()
+bg_mean = original_train_df['bg'].mean()
+bg_std = original_train_df['bg'].std()
 
 def create_dataset(df, preprocess, mean, std):
     formulas = df['formula'].tolist()
