@@ -172,10 +172,15 @@ translation_model = TranslationModel(base_model).to(device)
 criterion = nn.MSELoss()
 # Only optimize the parameters of the new head
 optimizer = optim.Adam(translation_model.translation_head.parameters(), lr=training_params['learning_rate'])
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode='min', factor=0.5, patience=5,
+)
 
 # --- Training Loop ---
 best_val_loss = float('inf')
 epochs = training_params['epochs']
+patience_val = 15
+patience_counter = 0
 
 for epoch in range(epochs):
     translation_model.translation_head.train() # Set only the head to train mode
@@ -207,10 +212,18 @@ for epoch in range(epochs):
     epoch_val_loss = running_val_loss / len(val_dataset)
     print(f"Epoch {epoch+1}/{epochs} | Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f}")
 
+    scheduler.step(epoch_val_loss)
+
     if epoch_val_loss < best_val_loss:
         best_val_loss = epoch_val_loss
+        patience_counter = 0
         torch.save(translation_model.state_dict(), "translation_model_best.pt")
         print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+    else:
+        patience_counter += 1
+        if patience_counter >= patience_val:
+            print(f"Early stopping after {epoch+1} epochs")
+            break
 
 # --- Evaluation ---
 output_dir = os.path.join(trainer.save_prefix, "runs/translation_run")
