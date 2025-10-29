@@ -329,3 +329,77 @@ plt.close()
 print("\n" + "="*50)
 print(f"Translation plots and metrics saved to '{output_dir}' directory.")
 print("="*50 + "\n")
+
+# --- Prediction on home_sol data ---
+print("\n" + "="*50)
+print("Predicting on home_sol data")
+print("="*50 + "\n")
+
+home_sol_df = pd.read_csv("data/runs/home_sol/home_sol.csv")
+
+# Prepare data for prediction
+formulas = home_sol_df['formula'].tolist()
+bg1_normalized = torch.tensor((home_sol_df['bg'].values - bg_mean) / bg_std, dtype=torch.float32)
+fid1 = torch.full_like(bg1_normalized, 2, dtype=torch.long) # pbe_sol fidelity is 2
+
+element_ids_list = []
+element_weights_list = []
+for formula in formulas:
+    element_ids, element_weights = preprocess.formula_to_set_representation(formula)
+    element_ids_list.append(element_ids)
+    element_weights_list.append(element_weights)
+
+element_ids = torch.tensor(element_ids_list, dtype=torch.long)
+element_weights = torch.tensor(element_weights_list, dtype=torch.float32)
+
+# --- Predict for HSE and EXPT ---
+target_fidelities_to_predict = {'hse': 5, 'expt': 6}
+predictions = {}
+
+for target_name, target_fid in target_fidelities_to_predict.items():
+    print(f"Predicting for {target_name}...")
+    fid2 = torch.full_like(bg1_normalized, target_fid, dtype=torch.long)
+    
+    prediction_dataset = TensorDataset(element_ids, element_weights, fid1, fid2, bg1_normalized)
+    prediction_loader = DataLoader(prediction_dataset, batch_size=training_params['batch_size'], shuffle=False)
+    
+    target_predictions_normalized = []
+    with torch.no_grad():
+        for data in prediction_loader:
+            e_ids, e_weights, f1, f2, b1 = [d.to(device) for d in data]
+            preds = translation_model(e_ids, e_weights, f1, f2, b1)
+            target_predictions_normalized.extend(preds.cpu().numpy())
+            
+    predictions[f'predicted_{target_name}_bg'] = (np.array(target_predictions_normalized) * bg_std) + bg_mean
+
+# --- Save results ---
+results_to_save_df = home_sol_df.copy()
+for pred_name, pred_values in predictions.items():
+    results_to_save_df[pred_name] = pred_values
+
+output_csv_path = os.path.join(output_dir, "home_sol_predictions.csv")
+results_to_save_df.to_csv(output_csv_path, index=False)
+
+print(f"Home-SOL predictions saved to {output_csv_path}")
+
+# Also save one for each fidelity
+for pred_name, pred_values in predictions.items():
+    single_fidelity_df = home_sol_df.copy()
+    single_fidelity_df[pred_name] = pred_values
+    output_csv_path = os.path.join(output_dir, f"home_sol_predictions_{pred_name.split('_')[1]}.csv")
+    single_fidelity_df.to_csv(output_csv_path, index=False)
+    print(f"Home-SOL {pred_name.split('_')[1]} predictions saved to {output_csv_path}")
+
+# --- Plotting the results ---
+plt.figure(figsize=(10, 6))
+plt.scatter(results_to_save_df['bg'], results_to_save_df['predicted_hse_bg'], label='Predicted HSE', alpha=0.5)
+plt.scatter(results_to_save_df['bg'], results_to_save_df['predicted_expt_bg'], label='Predicted EXPT', alpha=0.5)
+plt.xlabel("PBEsol Bandgap (eV)")
+plt.ylabel("Predicted Bandgap (eV)")
+plt.title("Translation from PBEsol to HSE and EXPT")
+plt.legend()
+plt.grid(True)
+plot_path = os.path.join(output_dir, "home_sol_translation_plot.png")
+plt.savefig(plot_path)
+print(f"Translation plot saved to {plot_path}")
+plt.close()
