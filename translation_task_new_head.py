@@ -15,9 +15,17 @@ import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 
 # --- Configuration ---
+parser = argparse.ArgumentParser(description='Translation task with a new head.')
+parser.add_argument('--train_on_all_data', action='store_true', help='Train on all data (train+val+test).')
+# To allow running in environments like notebooks that don't use command-line args easily
+args, unknown = parser.parse_known_args()
+
+
 collab = True # Set to True to save to Google Drive
+train_on_all_data = args.train_on_all_data # If True, combines train, val, and test sets for training
 
 load_path = os.path.join("data","runs","translate")
 
@@ -156,13 +164,21 @@ test_df = pd.read_csv(os.path.join(load_path,"test_combined.csv"))
 
 preprocess = MultiFidelityPreprocessing()
 
-train_dataset = create_dataset(train_df, preprocess, bg_mean, bg_std)
-val_dataset = create_dataset(val_df, preprocess, bg_mean, bg_std)
-test_dataset = create_dataset(test_df, preprocess, bg_mean, bg_std)
+if train_on_all_data:
+    print("Training on all data (train + val + test).")
+    all_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
+    train_dataset = create_dataset(all_df, preprocess, bg_mean, bg_std)
+    train_dataloader = DataLoader(train_dataset, batch_size=training_params['batch_size'], shuffle=True)
+    val_dataloader = None
+    test_dataloader = None
+else:
+    train_dataset = create_dataset(train_df, preprocess, bg_mean, bg_std)
+    val_dataset = create_dataset(val_df, preprocess, bg_mean, bg_std)
+    test_dataset = create_dataset(test_df, preprocess, bg_mean, bg_std)
 
-train_dataloader = DataLoader(train_dataset, batch_size=training_params['batch_size'], shuffle=True)
-val_dataloader = DataLoader(val_dataset, batch_size=training_params['batch_size'], shuffle=False)
-test_dataloader = DataLoader(test_dataset, batch_size=training_params['batch_size'], shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=training_params['batch_size'], shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=training_params['batch_size'], shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=training_params['batch_size'], shuffle=False)
 
 # --- Model, Loss, and Optimizer ---
 device = trainer.device
@@ -198,155 +214,164 @@ for epoch in range(epochs):
     
     epoch_train_loss = running_train_loss / len(train_dataset)
 
-    # Validation
-    translation_model.eval() # Set the whole model to eval mode
-    running_val_loss = 0.0
-    with torch.no_grad():
-        for data in val_dataloader:
-            element_ids, element_weights, fid1, fid2, bg1, bg2 = [d.to(device) for d in data]
-            predictions = translation_model(element_ids, element_weights, fid1, fid2, bg1)
-            loss = criterion(predictions, bg2)
-            running_val_loss += loss.item() * element_ids.size(0)
+    if val_dataloader:
+        # Validation
+        translation_model.eval() # Set the whole model to eval mode
+        running_val_loss = 0.0
+        with torch.no_grad():
+            for data in val_dataloader:
+                element_ids, element_weights, fid1, fid2, bg1, bg2 = [d.to(device) for d in data]
+                predictions = translation_model(element_ids, element_weights, fid1, fid2, bg1)
+                loss = criterion(predictions, bg2)
+                running_val_loss += loss.item() * element_ids.size(0)
 
-    epoch_val_loss = running_val_loss / len(val_dataset)
-    print(f"Epoch {epoch+1}/{epochs} | Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f}")
+        epoch_val_loss = running_val_loss / len(val_dataset)
+        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f}")
 
-    scheduler.step(epoch_val_loss)
+        scheduler.step(epoch_val_loss)
 
-    if epoch_val_loss < best_val_loss:
-        best_val_loss = epoch_val_loss
-        patience_counter = 0
-        torch.save(translation_model.state_dict(), "translation_model_best.pt")
-        print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+        if epoch_val_loss < best_val_loss:
+            best_val_loss = epoch_val_loss
+            patience_counter = 0
+            torch.save(translation_model.state_dict(), "translation_model_best.pt")
+            print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience_val:
+                print(f"Early stopping after {epoch+1} epochs")
+                break
     else:
-        patience_counter += 1
-        if patience_counter >= patience_val:
-            print(f"Early stopping after {epoch+1} epochs")
-            break
+        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {epoch_train_loss:.4f}")
+
+if not val_dataloader:
+    torch.save(translation_model.state_dict(), "translation_model_best.pt")
+    print("Model trained on all data and saved.")
 
 # --- Evaluation ---
 output_dir = os.path.join(trainer.save_prefix, "runs/translation_run")
 os.makedirs(output_dir, exist_ok=True)
 
-print("\n" + "="*50)
-print("Translation Model Evaluation")
-print(f"Output will be saved to {output_dir}")
-print("="*50 + "\n")
-
+print("\nLoading best model for subsequent tasks...")
 translation_model.load_state_dict(torch.load("translation_model_best.pt", weights_only=True))
-translation_model.eval() 
+translation_model.eval()
 
-all_predictions = []
-all_targets = []
-all_fidelity_1 = []
-all_fidelity_2 = []
+if test_dataloader:
+    print("\n" + "="*50)
+    print("Translation Model Evaluation")
+    print(f"Output will be saved to {output_dir}")
+    print("="*50 + "\n")
 
-with torch.no_grad():
-    for data in test_dataloader:
-        element_ids, element_weights, fid1, fid2, bg1, bg2 = [d.to(device) for d in data]
-        predictions = translation_model(element_ids, element_weights, fid1, fid2, bg1)
+    all_predictions = []
+    all_targets = []
+    all_fidelity_1 = []
+    all_fidelity_2 = []
+
+    with torch.no_grad():
+        for data in test_dataloader:
+            element_ids, element_weights, fid1, fid2, bg1, bg2 = [d.to(device) for d in data]
+            predictions = translation_model(element_ids, element_weights, fid1, fid2, bg1)
+            
+            # De-normalize predictions and targets
+            predictions_orig = predictions.cpu().numpy() * bg_std + bg_mean
+            targets_orig = bg2.cpu().numpy() * bg_std + bg_mean
+            
+            all_predictions.extend(predictions_orig.tolist())
+            all_targets.extend(targets_orig.tolist())
+            all_fidelity_1.extend(fid1.cpu().numpy().tolist())
+            all_fidelity_2.extend(fid2.cpu().numpy().tolist())
+
+    results_df = pd.DataFrame({
+        'prediction': all_predictions,
+        'target': all_targets,
+        'source_fidelity': all_fidelity_1,
+        'target_fidelity': all_fidelity_2
+    })
+    results_df.to_csv(os.path.join(output_dir, "predictions.csv"), index=False)
+
+
+    # --- Metrics and Plotting ---
+    inv_fidelity_map = {v: k for k, v in fidelity_map.items()}
+
+    # Create a list of all fidelity pairs
+    fidelity_pairs = results_df[['source_fidelity', 'target_fidelity']].drop_duplicates()
+
+    performance_data = []
+
+    for _, row in fidelity_pairs.iterrows():
+        source_fid = row['source_fidelity']
+        target_fid = row['target_fidelity']
         
-        # De-normalize predictions and targets
-        predictions_orig = predictions.cpu().numpy() * bg_std + bg_mean
-        targets_orig = bg2.cpu().numpy() * bg_std + bg_mean
+        source_fid_name = inv_fidelity_map.get(source_fid, f"Unknown_{source_fid}")
+        target_fid_name = inv_fidelity_map.get(target_fid, f"Unknown_{target_fid}")
         
-        all_predictions.extend(predictions_orig.tolist())
-        all_targets.extend(targets_orig.tolist())
-        all_fidelity_1.extend(fid1.cpu().numpy().tolist())
-        all_fidelity_2.extend(fid2.cpu().numpy().tolist())
-
-results_df = pd.DataFrame({
-    'prediction': all_predictions,
-    'target': all_targets,
-    'source_fidelity': all_fidelity_1,
-    'target_fidelity': all_fidelity_2
-})
-results_df.to_csv(os.path.join(output_dir, "predictions.csv"), index=False)
-
-
-# --- Metrics and Plotting ---
-inv_fidelity_map = {v: k for k, v in fidelity_map.items()}
-
-# Create a list of all fidelity pairs
-fidelity_pairs = results_df[['source_fidelity', 'target_fidelity']].drop_duplicates()
-
-performance_data = []
-
-for _, row in fidelity_pairs.iterrows():
-    source_fid = row['source_fidelity']
-    target_fid = row['target_fidelity']
-    
-    source_fid_name = inv_fidelity_map.get(source_fid, f"Unknown_{source_fid}")
-    target_fid_name = inv_fidelity_map.get(target_fid, f"Unknown_{target_fid}")
-    
-    print(f"--- Evaluating translation from {source_fid_name} to {target_fid_name} ---")
-    
-    pair_df = results_df[(results_df['source_fidelity'] == source_fid) & (results_df['target_fidelity'] == target_fid)]
-    
-    num_samples = len(pair_df)
-    
-    if num_samples > 0:
-        mae = mean_absolute_error(pair_df['target'], pair_df['prediction'])
-        rmse = np.sqrt(mean_squared_error(pair_df['target'], pair_df['prediction']))
-        r2 = r2_score(pair_df['target'], pair_df['prediction'])
+        print(f"--- Evaluating translation from {source_fid_name} to {target_fid_name} ---")
         
-        performance_data.append({
-            'orig': source_fid_name,
-            'target': target_fid_name,
-            'mae': mae,
-            'rmse': rmse,
-            'r2': r2,
-            'num_test_samples': num_samples
-        })
+        pair_df = results_df[(results_df['source_fidelity'] == source_fid) & (results_df['target_fidelity'] == target_fid)]
         
-        print(f"  MAE: {mae:.4f}, RMSE: {rmse:.4f}, R2: {r2:.4f}, Samples: {num_samples}")
+        num_samples = len(pair_df)
         
-        # Plotting for each pair
-        plt.figure(figsize=(8, 8))
-        plt.scatter(pair_df['target'], pair_df['prediction'], alpha=0.5)
-        min_val = min(pair_df['target'].min(), pair_df['prediction'].min())
-        max_val = max(pair_df['target'].max(), pair_df['prediction'].max())
-        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
-        plt.xlabel("Actual Bandgap (eV)")
-        plt.ylabel("Predicted Bandgap (eV)")
-        plt.title(f"Translation from {source_fid_name} to {target_fid_name}")
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(os.path.join(output_dir, f"translation_{source_fid_name}_to_{target_fid_name}.png"))
-        plt.close()
+        if num_samples > 0:
+            mae = mean_absolute_error(pair_df['target'], pair_df['prediction'])
+            rmse = np.sqrt(mean_squared_error(pair_df['target'], pair_df['prediction']))
+            r2 = r2_score(pair_df['target'], pair_df['prediction'])
+            
+            performance_data.append({
+                'orig': source_fid_name,
+                'target': target_fid_name,
+                'mae': mae,
+                'rmse': rmse,
+                'r2': r2,
+                'num_test_samples': num_samples
+            })
+            
+            print(f"  MAE: {mae:.4f}, RMSE: {rmse:.4f}, R2: {r2:.4f}, Samples: {num_samples}")
+            
+            # Plotting for each pair
+            plt.figure(figsize=(8, 8))
+            plt.scatter(pair_df['target'], pair_df['prediction'], alpha=0.5)
+            min_val = min(pair_df['target'].min(), pair_df['prediction'].min())
+            max_val = max(pair_df['target'].max(), pair_df['prediction'].max())
+            plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
+            plt.xlabel("Actual Bandgap (eV)")
+            plt.ylabel("Predicted Bandgap (eV)")
+            plt.title(f"Translation from {source_fid_name} to {target_fid_name}")
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(os.path.join(output_dir, f"translation_{source_fid_name}_to_{target_fid_name}.png"))
+            plt.close()
 
-# Create and save the performance table
-performance_df = pd.DataFrame(performance_data)
-performance_df = performance_df.sort_values(by=['orig', 'target']).reset_index(drop=True)
-performance_df.to_csv(os.path.join(output_dir, "translation_performance_by_pair.csv"), index=False)
+    # Create and save the performance table
+    performance_df = pd.DataFrame(performance_data)
+    performance_df = performance_df.sort_values(by=['orig', 'target']).reset_index(drop=True)
+    performance_df.to_csv(os.path.join(output_dir, "translation_performance_by_pair.csv"), index=False)
 
-print("\n" + "="*50)
-print("Translation Performance Table:")
-print(performance_df)
-print("="*50 + "\n")
+    print("\n" + "="*50)
+    print("Translation Performance Table:")
+    print(performance_df)
+    print("="*50 + "\n")
 
-# Overall plot
-target_fidelities = results_df['target_fidelity'].unique()
-plt.figure(figsize=(8, 8))
-for target_fid in sorted(target_fidelities):
-    target_fid_name = inv_fidelity_map.get(target_fid, f"Unknown_{target_fid}")
-    fidelity_df = results_df[results_df['target_fidelity'] == target_fid]
-    plt.scatter(fidelity_df['target'], fidelity_df['prediction'], alpha=0.5, label=f"To {target_fid_name}")
+    # Overall plot
+    target_fidelities = results_df['target_fidelity'].unique()
+    plt.figure(figsize=(8, 8))
+    for target_fid in sorted(target_fidelities):
+        target_fid_name = inv_fidelity_map.get(target_fid, f"Unknown_{target_fid}")
+        fidelity_df = results_df[results_df['target_fidelity'] == target_fid]
+        plt.scatter(fidelity_df['target'], fidelity_df['prediction'], alpha=0.5, label=f"To {target_fid_name}")
 
-min_val = min(results_df['target'].min(), results_df['prediction'].min())
-max_val = max(results_df['target'].max(), results_df['prediction'].max())
-plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
-plt.xlabel("Actual Bandgap (eV)")
-plt.ylabel("Predicted Bandgap (eV)")
-plt.title("Overall Translation Performance")
-plt.legend()
-plt.grid(True)
-plt.savefig(os.path.join(output_dir, "overall_translation.png"))
-plt.close()
+    min_val = min(results_df['target'].min(), results_df['prediction'].min())
+    max_val = max(results_df['target'].max(), results_df['prediction'].max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
+    plt.xlabel("Actual Bandgap (eV)")
+    plt.ylabel("Predicted Bandgap (eV)")
+    plt.title("Overall Translation Performance")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(output_dir, "overall_translation.png"))
+    plt.close()
 
-print("\n" + "="*50)
-print(f"Translation plots and metrics saved to '{output_dir}' directory.")
-print("="*50 + "\n")
+    print("\n" + "="*50)
+    print(f"Translation plots and metrics saved to '{output_dir}' directory.")
+    print("="*50 + "\n")
 
 # --- Prediction on home_sol data ---
 print("\n" + "="*50)
