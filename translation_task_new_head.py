@@ -2,7 +2,7 @@
 requires a trained model, and the last layer is modified for the translation task
 """
 
-
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from multi_main import MultiTrainer 
 from preprocess_set_data import MultiFidelityPreprocessing
 import torch
@@ -14,11 +14,10 @@ import os
 import json
 import pandas as pd
 import numpy as np
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 
 # --- Configuration ---
-collab = True # Set to True to save to Google Drive
+collab = False # Set to True to save to Google Drive
 
 load_path = os.path.join("data","runs","translate")
 
@@ -268,45 +267,63 @@ results_df.to_csv(os.path.join(output_dir, "predictions.csv"), index=False)
 # --- Metrics and Plotting ---
 inv_fidelity_map = {v: k for k, v in fidelity_map.items()}
 
-target_fidelities = results_df['target_fidelity'].unique()
-summary_metrics = {}
+# Create a list of all fidelity pairs
+fidelity_pairs = results_df[['source_fidelity', 'target_fidelity']].drop_duplicates()
 
-for target_fid in sorted(target_fidelities):
+performance_data = []
+
+for _, row in fidelity_pairs.iterrows():
+    source_fid = row['source_fidelity']
+    target_fid = row['target_fidelity']
+    
+    source_fid_name = inv_fidelity_map.get(source_fid, f"Unknown_{source_fid}")
     target_fid_name = inv_fidelity_map.get(target_fid, f"Unknown_{target_fid}")
-    print(f"--- Evaluating translations to {target_fid_name} ---")
     
-    fidelity_df = results_df[results_df['target_fidelity'] == target_fid]
+    print(f"--- Evaluating translation from {source_fid_name} to {target_fid_name} ---")
     
-    mae = mean_absolute_error(fidelity_df['target'], fidelity_df['prediction'])
-    rmse = np.sqrt(mean_squared_error(fidelity_df['target'], fidelity_df['prediction']))
-    r2 = r2_score(fidelity_df['target'], fidelity_df['prediction'])
+    pair_df = results_df[(results_df['source_fidelity'] == source_fid) & (results_df['target_fidelity'] == target_fid)]
     
-    summary_metrics[target_fid_name] = {'mae': mae, 'rmse': rmse, 'r2': r2}
+    num_samples = len(pair_df)
     
-    print(f"  MAE: {mae:.4f}, RMSE: {rmse:.4f}, R2: {r2:.4f}")
-    
-    # Plotting
-    plt.figure(figsize=(8, 8))
-    plt.scatter(fidelity_df['target'], fidelity_df['prediction'], alpha=0.5)
-    min_val = min(fidelity_df['target'].min(), fidelity_df['prediction'].min())
-    max_val = max(fidelity_df['target'].max(), fidelity_df['prediction'].max())
-    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
-    plt.xlabel("Actual Bandgap (eV)")
-    plt.ylabel("Predicted Bandgap (eV)")
-    plt.title(f"Translation to {target_fid_name}")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(output_dir, f"translation_to_{target_fid_name}.png"))
-    plt.close()
+    if num_samples > 0:
+        mae = mean_absolute_error(pair_df['target'], pair_df['prediction'])
+        rmse = np.sqrt(mean_squared_error(pair_df['target'], pair_df['prediction']))
+        r2 = r2_score(pair_df['target'], pair_df['prediction'])
+        
+        performance_data.append({
+            'orig': source_fid_name,
+            'target': target_fid_name,
+            'mae': mae,
+            'rmse': rmse,
+            'r2': r2,
+            'num_test_samples': num_samples
+        })
+        
+        print(f"  MAE: {mae:.4f}, RMSE: {rmse:.4f}, R2: {r2:.4f}, Samples: {num_samples}")
+        
+        # Plotting for each pair
+        plt.figure(figsize=(8, 8))
+        plt.scatter(pair_df['target'], pair_df['prediction'], alpha=0.5)
+        min_val = min(pair_df['target'].min(), pair_df['prediction'].min())
+        max_val = max(pair_df['target'].max(), pair_df['prediction'].max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
+        plt.xlabel("Actual Bandgap (eV)")
+        plt.ylabel("Predicted Bandgap (eV)")
+        plt.title(f"Translation from {source_fid_name} to {target_fid_name}")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(output_dir, f"translation_{source_fid_name}_to_{target_fid_name}.png"))
+        plt.close()
 
-# Summary plot
-metrics_df = pd.DataFrame(summary_metrics).T
-metrics_df.to_csv(os.path.join(output_dir, "performance_metrics.csv"))
-metrics_df.plot(kind='bar', subplots=True, figsize=(12, 8), layout=(1, 3), legend=False)
-plt.suptitle("Translation Performance Summary by Target Fidelity")
-plt.tight_layout(rect=[0, 0, 1, 0.96])
-plt.savefig(os.path.join(output_dir, "summary_metrics.png"))
-plt.close()
+# Create and save the performance table
+performance_df = pd.DataFrame(performance_data)
+performance_df = performance_df.sort_values(by=['orig', 'target']).reset_index(drop=True)
+performance_df.to_csv(os.path.join(output_dir, "translation_performance_by_pair.csv"), index=False)
+
+print("\n" + "="*50)
+print("Translation Performance Table:")
+print(performance_df)
+print("="*50 + "\n")
 
 # Overall plot
 plt.figure(figsize=(8, 8))
@@ -355,7 +372,6 @@ element_weights = torch.tensor(element_weights_list, dtype=torch.float32)
 # --- Predict for HSE and EXPT ---
 target_fidelities_to_predict = {'hse': 5, 'expt': 6}
 predictions = {}
-
 for target_name, target_fid in target_fidelities_to_predict.items():
     print(f"Predicting for {target_name}...")
     fid2 = torch.full_like(bg1_normalized, target_fid, dtype=torch.long)
