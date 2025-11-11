@@ -37,7 +37,7 @@ model_params = {
 
 
 training_params = {
-    "epochs": 10,
+    "epochs": 1,
     "batch_size": 64,
     "learning_rate": 0.000351208662205836,
     "weight_decay": 0.000001093212600,
@@ -326,6 +326,7 @@ print(performance_df)
 print("="*50 + "\n")
 
 # Overall plot
+target_fidelities = results_df['target_fidelity'].unique()
 plt.figure(figsize=(8, 8))
 for target_fid in sorted(target_fidelities):
     target_fid_name = inv_fidelity_map.get(target_fid, f"Unknown_{target_fid}")
