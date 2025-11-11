@@ -17,7 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- Configuration ---
-collab = False # Set to True to save to Google Drive
+collab = True # Set to True to save to Google Drive
 
 load_path = os.path.join("data","runs","translate")
 
@@ -37,7 +37,7 @@ model_params = {
 
 
 training_params = {
-    "epochs": 1,
+    "epochs": 50,
     "batch_size": 64,
     "learning_rate": 0.000351208662205836,
     "weight_decay": 0.000001093212600,
@@ -48,8 +48,8 @@ training_params = {
 fidelity_map = {"gga":0, "gga+u":1, "pbe_sol":2,"scan":3, "gllbsc":4, "hse":5,"expt":6}
 subsample_dict = {"gga":1, "gga+u":1, "pbe_sol":1,"scan":1, "gllbsc":1, "hse":1,"expt":1}
 
-trained_model_path = os.path.join("models","expanded_bg","bg_expanded_best.pt")
-model_params_path = os.path.join("models","expanded_bg","model_params.json")
+trained_model_path = os.path.join("models","javier_finetuned","javier_finetuned.pt")
+model_params_path = os.path.join("models","javier_finetuned","model_params.json")
 trainer = MultiTrainer(model_params=model_params, subsample_dict=subsample_dict,
                        training_params=training_params,model_params_path=model_params_path,
                        property_name="bg",
