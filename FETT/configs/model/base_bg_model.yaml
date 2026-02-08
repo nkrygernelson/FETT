@@ -1,0 +1,2 @@
+# points to the python class: src.mlops.model.TinyCNN
+_target_: src.fett.model.set_based_model.SetBasedBandgapModel
