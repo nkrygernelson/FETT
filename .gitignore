@@ -5,7 +5,9 @@ FETT/data/
 /memory/
 models/
 /outputs/*
-
+memory
+.claude
+.gemini
 # OS
 .DS_Store
 .DS_Store?
