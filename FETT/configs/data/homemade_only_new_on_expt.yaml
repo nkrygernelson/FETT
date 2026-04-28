@@ -1,0 +1,22 @@
+name: homemade_only_new_on_expt
+dataset_mode: only_new_on_expt
+raw_data_dir: data/raw/homemade
+processed_data_dir: data/processed/homemade_only_new_on_expt
+target_col: BG
+split: [0.6, 0.2, 0.2]
+
+fidelity_map:
+  pbe: 0
+  pbe-sol: 1
+  scan: 2
+  gllb-sc: 3
+  hse: 4
+  expt: 5
+
+files:
+  pbe: pbe.csv
+  pbe-sol: PBESOL.csv
+  scan: SCAN.csv
+  gllb-sc: GLLBSC.csv
+  hse: HSE.csv
+  expt: EXPT.csv

@@ -1,0 +1,6 @@
+defaults:
+  - data: homemade
+  - model: base_bg_model
+  - training: base_trainer
+  - eval: base
+  - _self_
