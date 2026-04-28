@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import lightning as L
 
 class AttentionPooling(nn.Module):
     """Pools element representations using learned attention weights."""

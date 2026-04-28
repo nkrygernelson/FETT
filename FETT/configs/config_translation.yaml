@@ -1,0 +1,6 @@
+defaults:
+  - data: homemade_translation
+  - model: translation_model
+  - training: base_trainer
+  - eval: base
+  - _self_

@@ -1,6 +1,8 @@
 # Custom Rules
 /grave/*
 /data/*
+FETT/data/
+/memory/
 models/
 /outputs/*
 

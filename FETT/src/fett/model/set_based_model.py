@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from attention_pooling import (
-    AttentionPooling, 
-    CrossAttentionPooling, 
-    HierarchicalAttentionPooling, 
-    GatedAttentionPooling
+from fett.model.attention_pooling import (
+    AttentionPooling,
+    CrossAttentionPooling,
+    HierarchicalAttentionPooling,
+    GatedAttentionPooling,
 )
 
 class ElementEmbedding(nn.Module):
@@ -205,31 +205,34 @@ class SetBasedBandgapModel(nn.Module):
         self.deep_set = DeepSet(embedding_dim+fidelity_dim, num_blocks, num_heads, dropout, pooling_type, pooling_params=pooling_params)
         self.prediction_head = PredictionHead(embedding_dim+fidelity_dim, hidden_dim, dropout)
         
-    def forward(self, element_ids, fidelities, element_weights=None):
+    def forward(self, element_ids, fidelities, element_weights=None, return_embedding: bool = False):
         # Create padding mask (True for padding elements)
         mask = (element_ids == 0)
-        
+
         # Embed elements
         element_embeddings = self.element_embedding(element_ids)  # [batch_size, max_elements, embedding_dim]
         fidelity_embedding = self.fidelity_embedding(fidelities)  # [batch_size, fidelity_dim]
-        
+
         # Expand fidelity embedding to add a dimension that matches max_elements
         expanded_fidelity = fidelity_embedding.unsqueeze(1).expand(-1, element_embeddings.size(1), -1)
-        
+
         # Concatenate along the last dimension
         embeddings = torch.cat([element_embeddings, expanded_fidelity], dim=2)
-        
+
         # If no weights provided, use uniform weights for non-padding elements
         if element_weights is None:
             element_weights = (~mask).float()
             # Normalize weights per example
             weight_sums = element_weights.sum(dim=1, keepdim=True)
             element_weights = element_weights / torch.clamp(weight_sums, min=1e-10)
-        
-        # Process with Deep Sets
+
+        # Process with Deep Sets → pooled representation [batch, embed_dim + fidelity_dim]
         global_repr = self.deep_set(embeddings, element_weights, mask)
-        
+
+        if return_embedding:
+            return global_repr
+
         # Predict bandgap
         bandgap = self.prediction_head(global_repr)
-        
+
         return bandgap

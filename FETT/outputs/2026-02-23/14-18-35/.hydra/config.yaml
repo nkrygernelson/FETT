@@ -1,0 +1,60 @@
+data:
+  name: homemade_pbe_to_all
+  dataset_mode: pbe_to_all
+  raw_data_dir: data/raw/homemade
+  processed_data_dir: data/processed/homemade_pbe_to_all
+  target_col: BG
+  split:
+  - 0.6
+  - 0.2
+  - 0.2
+  fidelity_map:
+    pbe: 0
+    scan: 1
+    gllb-sc: 2
+    hse: 3
+    expt: 4
+  files:
+    pbe: pbe.csv
+    scan: SCAN.csv
+    gllb-sc: GLLBSC.csv
+    hse: HSE.csv
+    expt: EXPT.csv
+model:
+  _target_: src.fett.model.lightning_module.FettLightningModule
+  model:
+    _target_: src.fett.model.set_based_model.SetBasedBandgapModel
+    embedding_dim: 172
+    fidelity_dim: 20
+    hidden_dim: 288
+    num_blocks: 5
+    num_fidelities: 5
+    num_elements: 118
+    num_heads: 16
+    dropout: 0.17912079167770537
+    pooling_type: weighted
+training:
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 0.001
+    weight_decay: 1.0e-05
+  trainer:
+    max_epochs: 150
+    accelerator: auto
+    gradient_clip_val: 1.0
+    log_every_n_steps: 10
+  callbacks:
+    early_stopping:
+      monitor: val/loss
+      patience: 15
+      mode: min
+    model_checkpoint:
+      monitor: val/loss
+      mode: min
+      save_top_k: 1
+      filename: best
+      dirpath: models/
+  batch_size: 64
+eval:
+  checkpoint: ???
+  mode: base

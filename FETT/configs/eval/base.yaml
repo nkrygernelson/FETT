@@ -1,0 +1,5 @@
+# Evaluation settings. Override at runtime:
+#   eval.checkpoint=models/best.ckpt
+#   eval.mode=translation
+checkpoint: ???
+mode: base
