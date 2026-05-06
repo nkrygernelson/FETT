@@ -1,7 +1,5 @@
-_target_: src.fett.model.lightning_module.FettTranslationModule
-
-# Path to a trained base model checkpoint (must contain embedded model_cfg).
-# Override at runtime: uv run invoke train-translation model.base_model_checkpoint=models/best.ckpt
+# Path to the trained base model checkpoint (must contain embedded model_cfg).
+# Override at runtime, e.g. model.base_model_checkpoint=models/best.ckpt
 base_model_checkpoint: ???
 
 head:

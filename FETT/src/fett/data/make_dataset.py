@@ -6,7 +6,7 @@ from pathlib import Path
 import hydra
 import pandas as pd
 from omegaconf import DictConfig
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from fett.utils import formula_to_set_representation
 
 log = logging.getLogger(__name__)
@@ -253,31 +253,34 @@ def _make_translation(
             "Check that multiple fidelities share formulas."
         )
 
-    pairs_df = pd.DataFrame(rows)
+    pairs_df = pd.DataFrame(rows).reset_index(drop=True)
     log.info(f"Created {len(pairs_df)} matched pairs from {len(all_formulas)} unique formulas")
 
-    # Stratified split on target_bg
-    pairs_df = prop_binning(pairs_df, prop_name="target_bg")
+    # Group-aware split keyed on formula: every pair sharing a formula must end up in the SAME
+    # split. Otherwise the head sees (formula, source_bg, source_fid) at train time and is
+    # asked to predict the same compound at a different target fidelity at test time, which
+    # would leak the formula's identity through the frozen base-model embeddings.
     train_size = split_ratios[0]
+    val_size = split_ratios[1]
     test_val_size = 1.0 - train_size
-    try:
-        train_df, temp_df = train_test_split(
-            pairs_df, train_size=train_size,
-            stratify=pairs_df["target_bg_category"], random_state=42
-        )
-        val_ratio = split_ratios[1] / test_val_size
-        val_df, test_df = train_test_split(
-            temp_df, train_size=val_ratio,
-            stratify=temp_df["target_bg_category"], random_state=42
-        )
-    except ValueError as e:
-        log.warning(f"Stratified split failed: {e}. Using random split.")
-        train_df, temp_df = train_test_split(pairs_df, train_size=train_size, random_state=42)
-        val_ratio = split_ratios[1] / test_val_size
-        val_df, test_df = train_test_split(temp_df, train_size=val_ratio, random_state=42)
 
-    for part in [train_df, val_df, test_df]:
-        part.drop(columns=["target_bg_category"], inplace=True, errors="ignore")
+    gss1 = GroupShuffleSplit(n_splits=1, train_size=train_size, random_state=42)
+    train_idx, temp_idx = next(gss1.split(pairs_df, groups=pairs_df["formula"]))
+    train_df = pairs_df.iloc[train_idx].copy()
+    temp_df = pairs_df.iloc[temp_idx].copy()
+
+    val_ratio = val_size / test_val_size
+    gss2 = GroupShuffleSplit(n_splits=1, train_size=val_ratio, random_state=42)
+    val_idx, test_idx = next(gss2.split(temp_df, groups=temp_df["formula"]))
+    val_df = temp_df.iloc[val_idx].copy()
+    test_df = temp_df.iloc[test_idx].copy()
+
+    # Sanity check: no formula should appear in more than one split.
+    train_f = set(train_df["formula"])
+    val_f = set(val_df["formula"])
+    test_f = set(test_df["formula"])
+    overlap = (train_f & test_f) | (train_f & val_f) | (val_f & test_f)
+    assert not overlap, f"Group split leaked {len(overlap)} formulas across splits"
 
     # Stats calculated from target_bg of training set only
     mean = train_df["target_bg"].mean()

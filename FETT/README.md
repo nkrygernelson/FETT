@@ -1,56 +1,76 @@
-````markdown
-# fett
+# FETT — Fidelity-Embedding Transformer Translator
 
-Fidelity Embedding Transformer Translator
+Reference implementation of the multi-fidelity bandgap predictor and the cross-fidelity
+translation pipeline (e.g. PBEsol → experimental).
 
-## Project structure
+The pipeline has two models:
 
-The directory structure of the project looks like this:
-```txt
-├── .github/                  # Github actions and dependabot
-│   ├── dependabot.yaml
-│   └── workflows/
-│       └── tests.yaml
-├── configs/                  # Configuration files
-├── data/                     # Data directory
-│   ├── processed
-│   └── raw
-├── dockerfiles/              # Dockerfiles
-│   ├── api.Dockerfile
-│   └── train.Dockerfile
-├── docs/                     # Documentation
-│   ├── mkdocs.yml
-│   └── source/
-│       └── index.md
-├── models/                   # Trained models
-├── notebooks/                # Jupyter notebooks
-├── reports/                  # Reports
-│   └── figures/
-├── src/                      # Source code
-│   ├── project_name/
-│   │   ├── __init__.py
-│   │   ├── api.py
-│   │   ├── data.py
-│   │   ├── evaluate.py
-│   │   ├── models.py
-│   │   ├── train.py
-│   │   └── visualize.py
-└── tests/                    # Tests
-│   ├── __init__.py
-│   ├── test_api.py
-│   ├── test_data.py
-│   └── test_model.py
-├── .gitignore
-├── .pre-commit-config.yaml
-├── LICENSE
-├── pyproject.toml            # Python project file
-├── README.md                 # Project README
-└── tasks.py                  # Project tasks
+1. **Base model** — a permutation-invariant transformer over element embeddings, trained on
+   ~7 fidelity levels (PBE, PBE+U, PBEsol, SCAN, GLLB-SC, HSE, experimental). Predicts
+   bandgaps from composition + fidelity label and exposes a pooled compound embedding.
+2. **Translation head** — an MLP that takes two pooled embeddings (source-fidelity and
+   target-fidelity) plus the source bandgap and predicts the target-fidelity bandgap.
+
+## Setup
+
+```bash
+uv sync                  # core deps (training / eval)
+uv sync --extra data     # also install matminer + mp-api for rebuilding raw data
+uv sync --extra wandb    # also install wandb for optional W&B logging
 ```
 
+Enable W&B logging with a Hydra override:
+```bash
+uv run invoke train -- training.logger.wandb.enabled=true training.logger.wandb.project=fett
+```
 
-Created using [mlops_template](https://github.com/SkafteNicki/mlops_template),
-a [cookiecutter template](https://github.com/cookiecutter/cookiecutter) for getting
-started with Machine Learning Operations (MLOps).
+## Workflow
 
-````
+```bash
+# 1. (optional) rebuild raw CSVs from public sources
+export MP_API_KEY=<your-key>
+uv run invoke parse-sources
+uv run invoke query-mp
+uv run invoke combine-raw
+
+# 2. Build train/val/test splits for the base model
+uv run invoke make-data                            # data=homemade
+
+# 3. Train the base model — saves to models/best.ckpt
+uv run invoke train
+
+# 4. Evaluate the base model per fidelity (writes plots + CSVs to reports/figures/)
+uv run invoke evaluate --ckpt models/best.ckpt
+
+# 5. Build a translation dataset (e.g. PBEsol → all higher fidelities)
+uv run invoke make-data --mode homemade_pbesol_to_all
+
+# 6. Train the translation head on top of the frozen base model
+uv run invoke train-translation --base-ckpt models/best.ckpt
+# 5-fold cross-validation (paper Table 4):
+uv run invoke train-translation --base-ckpt models/best.ckpt --cv 5
+
+# 7. Evaluate the translation model per fidelity pair
+uv run invoke evaluate-translation --ckpt models/best_translation.ckpt
+```
+
+Other dataset modes available via `--mode`: `homemade`, `homemade_only_new_on_expt`,
+`homemade_translation`, `homemade_pbe_to_all`, `homemade_pbesol_to_all`,
+`homemade_to_expt`. Hydra overrides work for any flag, e.g.
+`uv run src/fett/train.py training.batch_size=128`.
+
+## Layout
+
+```
+configs/      Hydra configs (data, model, training, eval)
+scripts/data/ Raw-data ingestion (sources → interim → raw)
+src/fett/
+  data/       Dataset loaders + make_dataset.py
+  model/      SetBasedBandgapModel, attention pooling, translation head, Lightning modules
+  train.py            Train base
+  train_translation.py Train translation head (single split or K-fold CV)
+  evaluate.py         Per-fidelity / per-pair metrics + parity plots
+data/         raw/, interim/, processed/ (gitignored)
+models/       checkpoints
+reports/      figures + per-split predictions
+```

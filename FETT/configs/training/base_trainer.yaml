@@ -8,6 +8,7 @@ trainer:
   accelerator: auto
   gradient_clip_val: 1.0
   log_every_n_steps: 10
+  enable_progress_bar: false   # plain per-epoch prints via EpochPrint callback
 
 callbacks:
   early_stopping:
@@ -22,3 +23,11 @@ callbacks:
     dirpath: models/
 
 batch_size: 64
+
+# Optional: weights & biases logger. Enable with training.logger.wandb.enabled=true.
+logger:
+  wandb:
+    enabled: false
+    project: fett
+    name: null   # auto-generated if null
+    tags: []
